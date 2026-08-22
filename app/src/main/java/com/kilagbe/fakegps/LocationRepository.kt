@@ -75,6 +75,16 @@ class LocationRepository(private val context: Context) {
         FakeGpsWidgetProvider.updateWidgets(context)
     }
 
+    /** Restores saved locations from the Downloads backup file, but only if the
+     *  current list is empty (i.e. fresh install / reinstall). Returns true if it restored anything. */
+    suspend fun restoreFromBackupIfEmpty(): Boolean {
+        if (getSavedLocations().isNotEmpty()) return false
+        val backup = LocalBackupManager.readBackup(context)
+        if (backup.isNullOrEmpty()) return false
+        persist(backup)
+        return true
+    }
+
     private suspend fun persist(list: List<SavedLocation>) {
         val arr = JSONArray()
         list.forEach {
@@ -87,6 +97,7 @@ class LocationRepository(private val context: Context) {
         context.dataStore.edit { prefs ->
             prefs[PrefKeys.SAVED_LOCATIONS] = arr.toString()
         }
+        LocalBackupManager.writeBackup(context, list)
     }
 
     suspend fun setActive(active: Boolean, lat: Double, lng: Double, name: String?) {

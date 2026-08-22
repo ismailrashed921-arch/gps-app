@@ -15,6 +15,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Looper
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -26,6 +27,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -161,6 +163,7 @@ fun PermissionRequestScreen(onRequestClick: () -> Unit) {
 fun AppRoot() {
     val context = LocalContext.current
     val repo = remember { LocationRepository(context) }
+    val scope = rememberCoroutineScope()
 
     CrashLogDialog(context)
 
@@ -188,6 +191,17 @@ fun AppRoot() {
         }
     }
 
+    // Restore saved locations from the Downloads backup file if the list is empty
+    // (covers reinstall-after-uninstall)
+    LaunchedEffect(permissionsGranted) {
+        if (permissionsGranted) {
+            val restored = repo.restoreFromBackupIfEmpty()
+            if (restored) {
+                Toast.makeText(context, "আগের সেভ করা লোকেশন ফিরিয়ে আনা হয়েছে", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     if (!permissionsGranted) {
         PermissionRequestScreen {
             val permissionsToRequest = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
@@ -201,7 +215,6 @@ fun AppRoot() {
 
     var tab by remember { mutableStateOf("map") }
     val saved by repo.savedLocationsFlow.collectAsState(initial = emptyList())
-    val scope = rememberCoroutineScope()
 
     Scaffold(
         containerColor = BgColor,
@@ -234,11 +247,7 @@ fun AppRoot() {
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (tab) {
                 "map" -> MapScreen(repo)
-                "saved" -> SavedScreen(
-                    saved = saved,
-                    onDelete = { name -> scope.launch { repo.removeLocation(name) } },
-                    onSelect = { loc -> startMock(context, loc.lat, loc.lng, loc.name) }
-                )
+                "saved" -> SavedScreen(repo = repo, saved = saved)
                 "settings" -> SettingsScreen(repo)
             }
         }
@@ -323,6 +332,9 @@ fun MapScreen(repo: LocationRepository) {
     val locked = activeState.first
     val activePinLatLng: Pair<Double, Double>? =
         if (activeState.first) Pair(activeState.second, activeState.third) else null
+    val activeName = savedLocations.firstOrNull {
+        activeState.first && kotlin.math.abs(it.lat - activeState.second) < 0.00001 && kotlin.math.abs(it.lng - activeState.third) < 0.00001
+    }?.name ?: "কাস্টম"
 
     LaunchedEffect(activeState) {
         if (initialCentered) return@LaunchedEffect
@@ -421,94 +433,137 @@ fun MapScreen(repo: LocationRepository) {
             modifier = Modifier.align(Alignment.Center).size(40.dp)
         )
 
+        // ---- Status pill ----
         Surface(
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = 70.dp),
-            shape = RoundedCornerShape(20.dp),
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 14.dp),
+            shape = RoundedCornerShape(50),
             color = SurfaceColor,
             shadowElevation = 4.dp
         ) {
-            Text(
-                "%.6f, %.6f".format(centerLat, centerLng),
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                fontSize = 12.sp,
-                color = if (locked) TealDark else TextSecondary
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+            ) {
+                Box(
+                    Modifier
+                        .size(8.dp)
+                        .background(if (locked) Teal else Color(0xFF94A3B8), CircleShape)
+                )
+                Spacer(Modifier.width(8.dp))
+                Column {
+                    Text(
+                        if (locked) "সক্রিয় — $activeName" else "লাইভ লোকেশন",
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                    Text(
+                        "%.5f, %.5f".format(centerLat, centerLng),
+                        fontSize = 10.5.sp,
+                        color = TextSecondary
+                    )
+                }
+            }
         }
 
-        SmallFloatingActionButton(
-            onClick = { showDialog = true },
-            containerColor = SurfaceColor,
-            contentColor = Teal,
-            modifier = Modifier.align(Alignment.TopEnd).padding(top = 12.dp, end = 12.dp)
+        // ---- Toolbar (coordinate + recenter) ----
+        Surface(
+            modifier = Modifier.align(Alignment.TopEnd).padding(top = 70.dp, end = 12.dp),
+            shape = RoundedCornerShape(16.dp),
+            color = SurfaceColor,
+            shadowElevation = 4.dp
         ) {
-            Icon(Icons.Filled.Tag, contentDescription = "কোঅর্ডিনেট বসান")
-        }
-
-        SmallFloatingActionButton(
-            onClick = {
-                scope.launch {
-                    if (locked) {
-                        val real = repo.getRealLocation()
-                        if (real != null) {
-                            centerLat = real.first
-                            centerLng = real.second
-                            jumpTarget = GeoPoint(real.first, real.second)
-                        } else {
-                            fetchCurrentLocation(context) { lat, lng ->
-                                centerLat = lat
-                                centerLng = lng
-                                jumpTarget = GeoPoint(lat, lng)
+            Column {
+                IconButton(onClick = { showDialog = true }, modifier = Modifier.size(44.dp)) {
+                    Icon(Icons.Filled.Tag, contentDescription = "কোঅর্ডিনেট বসান", tint = TealDark, modifier = Modifier.size(19.dp))
+                }
+                HorizontalDivider(color = BorderColor)
+                IconButton(
+                    onClick = {
+                        scope.launch {
+                            if (locked) {
+                                val real = repo.getRealLocation()
+                                if (real != null) {
+                                    centerLat = real.first
+                                    centerLng = real.second
+                                    jumpTarget = GeoPoint(real.first, real.second)
+                                } else {
+                                    fetchCurrentLocation(context) { lat, lng ->
+                                        centerLat = lat
+                                        centerLng = lng
+                                        jumpTarget = GeoPoint(lat, lng)
+                                    }
+                                }
+                            } else {
+                                fetchCurrentLocation(context) { lat, lng ->
+                                    centerLat = lat
+                                    centerLng = lng
+                                    jumpTarget = GeoPoint(lat, lng)
+                                    scope.launch { repo.setRealLocation(lat, lng) }
+                                }
                             }
                         }
-                    } else {
-                        fetchCurrentLocation(context) { lat, lng ->
-                            centerLat = lat
-                            centerLng = lng
-                            jumpTarget = GeoPoint(lat, lng)
-                            scope.launch { repo.setRealLocation(lat, lng) }
-                        }
-                    }
+                    },
+                    modifier = Modifier.size(44.dp)
+                ) {
+                    Icon(Icons.Filled.MyLocation, contentDescription = "বর্তমান লোকেশনে যান", tint = TealDark, modifier = Modifier.size(19.dp))
                 }
-            },
-            containerColor = SurfaceColor,
-            contentColor = Teal,
-            modifier = Modifier.align(Alignment.TopEnd).padding(top = 68.dp, end = 12.dp)
-        ) {
-            Icon(Icons.Filled.MyLocation, contentDescription = "বর্তমান লোকেশনে যান")
+            }
         }
 
-        Column(
+        // ---- Bottom action bar ----
+        Row(
             modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 24.dp),
-            horizontalAlignment = Alignment.End,
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             if (locked) {
-                FloatingActionButton(
+                Surface(
                     onClick = { showSaveDialog = true },
-                    containerColor = SurfaceColor,
-                    contentColor = Teal,
+                    shape = RoundedCornerShape(14.dp),
+                    color = SurfaceColor,
+                    shadowElevation = 6.dp,
                     modifier = Modifier.size(46.dp)
                 ) {
-                    Icon(Icons.Filled.Star, contentDescription = "সেভ করুন", modifier = Modifier.size(20.dp))
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(Icons.Filled.Star, contentDescription = "সেভ করুন", tint = Teal, modifier = Modifier.size(19.dp))
+                    }
                 }
-                FloatingActionButton(
+                Surface(
                     onClick = { stopMock(context) },
-                    containerColor = Color(0xFFFEF2F2),
-                    contentColor = Color(0xFFDC2626),
-                    modifier = Modifier.size(46.dp)
+                    shape = RoundedCornerShape(50),
+                    color = Color(0xFFDC2626),
+                    shadowElevation = 6.dp,
+                    modifier = Modifier.height(44.dp)
                 ) {
-                    Icon(Icons.Filled.Close, contentDescription = "বন্ধ করুন", modifier = Modifier.size(20.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 18.dp)
+                    ) {
+                        Icon(Icons.Filled.Close, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("বন্ধ করুন", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
                 }
             } else {
-                ExtendedFloatingActionButton(
+                Surface(
                     onClick = { startMock(context, centerLat, centerLng, "কাস্টম") },
-                    containerColor = Teal,
-                    contentColor = Color.White,
-                    icon = { Icon(Icons.Filled.MyLocation, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                    text = { Text("সেট করুন", fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
-                )
+                    shape = RoundedCornerShape(50),
+                    color = Teal,
+                    shadowElevation = 6.dp,
+                    modifier = Modifier.height(44.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 20.dp)
+                    ) {
+                        Icon(Icons.Filled.MyLocation, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("সেট করুন", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+                }
             }
         }
     }
@@ -623,53 +678,255 @@ fun CoordinateDialog(
 }
 
 @Composable
-fun SavedScreen(
-    saved: List<SavedLocation>,
-    onDelete: (String) -> Unit,
-    onSelect: (SavedLocation) -> Unit
-) {
-    Column(Modifier.fillMaxSize()) {
-        Text(
-            "সেভ করা লোকেশন",
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Bold,
-            color = TextPrimary,
-            modifier = Modifier.padding(16.dp)
-        )
-        LazyColumn(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            items(saved) { loc ->
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = SurfaceColor,
-                    border = BorderStroke(1.dp, BorderColor),
+fun AddLocationDialog(onDismiss: () -> Unit, onConfirm: (String, Double, Double) -> Unit) {
+    var name by remember { mutableStateOf("") }
+    var latStr by remember { mutableStateOf("") }
+    var lngStr by remember { mutableStateOf("") }
+    val latNum = latStr.toDoubleOrNull()
+    val lngNum = lngStr.toDoubleOrNull()
+    val valid = name.isNotBlank() && latNum != null && lngNum != null &&
+        latNum in -90.0..90.0 && lngNum in -180.0..180.0
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("নতুন লোকেশন যোগ করুন") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("নাম") },
+                    placeholder = { Text("যেমন: বাসা") },
+                    singleLine = true,
                     modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = latStr,
+                    onValueChange = { latStr = it },
+                    label = { Text("Latitude") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = lngStr,
+                    onValueChange = { lngStr = it },
+                    label = { Text("Longitude") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { if (valid) onConfirm(name.trim(), latNum!!, lngNum!!) },
+                enabled = valid
+            ) { Text("যোগ করুন", color = Teal) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("বাতিল") }
+        }
+    )
+}
+
+@Composable
+fun SavedScreen(repo: LocationRepository, saved: List<SavedLocation>) {
+    val scope = rememberCoroutineScope()
+    var query by remember { mutableStateOf("") }
+    var showAddDialog by remember { mutableStateOf(false) }
+    val activeState by repo.activeStateFlow.collectAsState(initial = Triple(false, 23.8103, 90.4125))
+
+    val filtered = if (query.isBlank()) saved else saved.filter {
+        it.name.contains(query, ignoreCase = true)
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            Column(Modifier.padding(16.dp, 18.dp, 16.dp, 4.dp)) {
+                Text("সেভ করা লোকেশন", fontSize = 21.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                Text(
+                    "${saved.size}টি লোকেশন সেভ আছে",
+                    fontSize = 11.5.sp,
+                    color = Color(0xFF94A3B8),
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = SurfaceColor,
+                border = BorderStroke(1.dp, BorderColor),
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = 12.dp)
+                    .fillMaxWidth()
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
                 ) {
-                    Row(
-                        Modifier
-                            .padding(14.dp)
-                            .fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Filled.LocationOn, contentDescription = null, tint = Teal)
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f).clickable { onSelect(loc) }) {
-                            Text(loc.name, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-                            Text(
-                                "%.5f, %.5f".format(loc.lat, loc.lng),
-                                fontSize = 11.sp,
-                                color = TextSecondary
-                            )
+                    Icon(Icons.Filled.Search, contentDescription = null, tint = Color(0xFF94A3B8), modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                    androidx.compose.foundation.text.BasicTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = TextPrimary),
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        decorationBox = { inner ->
+                            if (query.isEmpty()) {
+                                Text("লোকেশন খুঁজুন", fontSize = 13.sp, color = Color(0xFF94A3B8))
+                            }
+                            inner()
                         }
-                        IconButton(onClick = { onDelete(loc.name) }) {
-                            Icon(Icons.Filled.Delete, contentDescription = null, tint = Color(0xFFDC2626))
+                    )
+                }
+            }
+
+            LazyColumn(
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                items(filtered) { loc ->
+                    val isActive = activeState.first &&
+                        kotlin.math.abs(loc.lat - activeState.second) < 0.00001 &&
+                        kotlin.math.abs(loc.lng - activeState.third) < 0.00001
+
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = SurfaceColor,
+                        border = BorderStroke(1.dp, BorderColor),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            Modifier
+                                .padding(13.dp)
+                                .fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(38.dp)
+                                    .background(if (isActive) Teal else Color(0xFFE6FBF7), RoundedCornerShape(12.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Filled.LocationOn,
+                                    contentDescription = null,
+                                    tint = if (isActive) Color.White else TealDark,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f).clickable { startMock(LocalContext_forItem, loc.lat, loc.lng, loc.name) }) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(loc.name, fontWeight = FontWeight.Bold, fontSize = 13.5.sp, color = TextPrimary)
+                                    if (isActive) {
+                                        Spacer(Modifier.width(6.dp))
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = Color(0xFFE6FBF7)
+                                        ) {
+                                            Text(
+                                                "সক্রিয়",
+                                                fontSize = 9.5.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = TealDark,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                                Text(
+                                    "%.5f, %.5f".format(loc.lat, loc.lng),
+                                    fontSize = 11.sp,
+                                    color = Color(0xFF94A3B8)
+                                )
+                            }
+                            IconButton(onClick = { scope.launch { repo.removeLocation(loc.name) } }) {
+                                Icon(Icons.Filled.Delete, contentDescription = null, tint = Color(0xFFDC2626), modifier = Modifier.size(18.dp))
+                            }
                         }
                     }
                 }
+                item { Spacer(Modifier.height(70.dp)) }
             }
         }
+
+        Surface(
+            onClick = { showAddDialog = true },
+            shape = RoundedCornerShape(17.dp),
+            color = Teal,
+            shadowElevation = 8.dp,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(20.dp)
+                .size(54.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.Add, contentDescription = "নতুন লোকেশন যোগ করুন", tint = Color.White, modifier = Modifier.size(22.dp))
+            }
+        }
+    }
+
+    if (showAddDialog) {
+        AddLocationDialog(
+            onDismiss = { showAddDialog = false },
+            onConfirm = { name, lat, lng ->
+                scope.launch { repo.addLocation(SavedLocation(name, lat, lng)) }
+                showAddDialog = false
+            }
+        )
+    }
+}
+
+@Composable
+fun SettingsSectionLabel(text: String) {
+    Text(
+        text.uppercase(),
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Bold,
+        color = Color(0xFF94A3B8),
+        modifier = Modifier.padding(start = 4.dp, top = 18.dp, bottom = 8.dp)
+    )
+}
+
+@Composable
+fun SettingsIconRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    description: String? = null,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit
+) {
+    Row(
+        Modifier
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .size(34.dp)
+                .background(Color(0xFFE6FBF7), RoundedCornerShape(10.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = TealDark, modifier = Modifier.size(17.dp))
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+            description?.let {
+                Text(it, fontSize = 11.sp, color = Color(0xFF94A3B8), modifier = Modifier.padding(top = 1.dp))
+            }
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onChange,
+            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Teal)
+        )
     }
 }
 
@@ -700,143 +957,106 @@ fun SettingsScreen(repo: LocationRepository) {
         }
     }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("সেটিংস", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-        Spacer(Modifier.height(16.dp))
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+        Text("সেটিংস", fontSize = 21.sp, fontWeight = FontWeight.Bold, color = TextPrimary, modifier = Modifier.padding(top = 18.dp))
 
-        SettingsToggleRow("ফোন চালু হলে অটো-স্টার্ট", autoStart) {
-            autoStart = it
-            scope.launch { repo.setAutoStart(it) }
-        }
-        Spacer(Modifier.height(10.dp))
-        SettingsToggleRow("র‍্যান্ডম জিটার (±৫ মিটার)", jitter) {
-            jitter = it
-            scope.launch { repo.setJitter(it) }
-        }
-
-        Spacer(Modifier.height(20.dp))
-        Text(
-            "ফ্লোটিং বাটন",
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = TextPrimary
-        )
-        Text(
-            "চালু করলে Facebook, YouTube বা যেকোনো অ্যাপের উপরে একটা ছোট বাটন ভাসবে — ট্যাপ করলে লোকেশন অন/অফ টগল হবে। প্রথমবার \"Display over other apps\" পারমিশন দিতে হবে।",
-            fontSize = 11.sp,
-            color = TextSecondary,
-            modifier = Modifier.padding(top = 4.dp, bottom = 10.dp)
-        )
-        SettingsToggleRow("ফ্লোটিং বাটন চালু করুন", bubbleEnabled) { checked ->
-            if (checked) {
-                if (Settings.canDrawOverlays(context)) {
-                    scope.launch { repo.setBubbleEnabled(true) }
-                } else {
-                    val intent = Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:${context.packageName}")
-                    )
-                    overlayPermissionLauncher.launch(intent)
+        SettingsSectionLabel("সাধারণ")
+        Surface(shape = RoundedCornerShape(16.dp), color = SurfaceColor, border = BorderStroke(1.dp, BorderColor), modifier = Modifier.fillMaxWidth()) {
+            Column {
+                SettingsIconRow(Icons.Filled.PowerSettingsNew, "ফোন চালু হলে অটো-স্টার্ট", checked = autoStart) {
+                    autoStart = it
+                    scope.launch { repo.setAutoStart(it) }
                 }
-            } else {
-                scope.launch { repo.setBubbleEnabled(false) }
+                HorizontalDivider(color = BorderColor)
+                SettingsIconRow(Icons.Filled.Shuffle, "র‍্যান্ডম জিটার", "±৫ মিটার এলোমেলো ভ্যারিয়েশন", checked = jitter) {
+                    jitter = it
+                    scope.launch { repo.setJitter(it) }
+                }
             }
         }
 
-        Spacer(Modifier.height(20.dp))
-        Text(
-            "অটো সাইকেল",
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = TextPrimary
-        )
-        Text(
-            "চালু করলে সেভ করা লোকেশনগুলো নিচের সময় অনুযায়ী একটার পর একটা নিজে থেকে বদলাতে থাকবে। বন্ধ থাকলে সবসময়ের মতো ম্যানুয়ালি লোকেশন সেট করতে হবে।",
-            fontSize = 11.sp,
-            color = TextSecondary,
-            modifier = Modifier.padding(top = 4.dp, bottom = 10.dp)
-        )
-
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = SurfaceColor,
-            border = BorderStroke(1.dp, BorderColor),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(Modifier.padding(14.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "অটো সাইকেল চালু করুন",
-                        modifier = Modifier.weight(1f),
-                        color = TextPrimary,
-                        fontSize = 14.sp
-                    )
-                    Switch(
-                        checked = autoCycleState.first,
-                        onCheckedChange = { checked ->
-                            val minutes = minutesText.toIntOrNull()?.coerceAtLeast(1) ?: 10
-                            if (checked) {
-                                if (savedCount.isEmpty()) return@Switch
-                                scope.launch { repo.setAutoCycle(true, minutes) }
-                                startAutoCycle(context, minutes)
-                            } else {
-                                scope.launch { repo.setAutoCycle(false, minutes) }
-                                stopMock(context)
-                            }
-                        },
-                        colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Teal)
-                    )
+        SettingsSectionLabel("ফ্লোটিং বাটন")
+        Surface(shape = RoundedCornerShape(16.dp), color = SurfaceColor, border = BorderStroke(1.dp, BorderColor), modifier = Modifier.fillMaxWidth()) {
+            SettingsIconRow(
+                Icons.Filled.TouchApp,
+                "ফ্লোটিং বাটন চালু করুন",
+                "অন্য অ্যাপের উপরে ভেসে থাকা টগল বাটন",
+                checked = bubbleEnabled
+            ) { checked ->
+                if (checked) {
+                    if (Settings.canDrawOverlays(context)) {
+                        scope.launch { repo.setBubbleEnabled(true) }
+                    } else {
+                        val intent = Intent(
+                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:${context.packageName}")
+                        )
+                        overlayPermissionLauncher.launch(intent)
+                    }
+                } else {
+                    scope.launch { repo.setBubbleEnabled(false) }
                 }
+            }
+        }
 
+        SettingsSectionLabel("অটো সাইকেল")
+        Surface(shape = RoundedCornerShape(16.dp), color = SurfaceColor, border = BorderStroke(1.dp, BorderColor), modifier = Modifier.fillMaxWidth()) {
+            Column {
+                SettingsIconRow(
+                    Icons.Filled.Autorenew,
+                    "অটো সাইকেল চালু করুন",
+                    "সেভ করা লোকেশন পালাক্রমে বদলাবে",
+                    checked = autoCycleState.first
+                ) { checked ->
+                    val minutes = minutesText.toIntOrNull()?.coerceAtLeast(1) ?: 10
+                    if (checked) {
+                        if (savedCount.isEmpty()) return@SettingsIconRow
+                        scope.launch { repo.setAutoCycle(true, minutes) }
+                        startAutoCycle(context, minutes)
+                    } else {
+                        scope.launch { repo.setAutoCycle(false, minutes) }
+                        stopMock(context)
+                    }
+                }
                 if (savedCount.isEmpty()) {
                     Text(
                         "প্রথমে অন্তত একটা লোকেশন সেভ করুন",
                         color = Color(0xFFDC2626),
                         fontSize = 11.sp,
-                        modifier = Modifier.padding(top = 6.dp)
+                        modifier = Modifier.padding(start = 14.dp, bottom = 8.dp)
                     )
                 }
-
-                Spacer(Modifier.height(10.dp))
-                Text("কত মিনিট পরপর বদলাবে", color = TextSecondary, fontSize = 11.sp)
-                Spacer(Modifier.height(4.dp))
-                OutlinedTextField(
-                    value = minutesText,
-                    onValueChange = { text ->
-                        minutesText = text.filter { it.isDigit() }
-                        val minutes = minutesText.toIntOrNull()
-                        if (minutes != null && minutes > 0) {
-                            scope.launch { repo.setAutoCycle(autoCycleState.first, minutes) }
-                            if (autoCycleState.first) startAutoCycle(context, minutes)
-                        }
-                    },
-                    suffix = { Text("মিনিট") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(0.5f)
-                )
+                HorizontalDivider(color = BorderColor)
+                Row(
+                    Modifier.padding(14.dp).fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("কত মিনিট পরপর বদলাবে", color = Color(0xFF94A3B8), fontSize = 12.sp, modifier = Modifier.weight(1f))
+                    OutlinedTextField(
+                        value = minutesText,
+                        onValueChange = { text ->
+                            minutesText = text.filter { it.isDigit() }
+                            val minutes = minutesText.toIntOrNull()
+                            if (minutes != null && minutes > 0) {
+                                scope.launch { repo.setAutoCycle(autoCycleState.first, minutes) }
+                                if (autoCycleState.first) startAutoCycle(context, minutes)
+                            }
+                        },
+                        suffix = { Text("মিনিট", fontSize = 11.sp) },
+                        singleLine = true,
+                        modifier = Modifier.width(110.dp)
+                    )
+                }
             }
         }
-    }
-}
 
-@Composable
-fun SettingsToggleRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = SurfaceColor,
-        border = BorderStroke(1.dp, BorderColor),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            Modifier.padding(14.dp).fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(title, modifier = Modifier.weight(1f), color = TextPrimary, fontSize = 14.sp)
-            Switch(
-                checked = checked,
-                onCheckedChange = onChange,
-                colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Teal)
-            )
-        }
+        Spacer(Modifier.height(24.dp))
+
+        Text(
+            "সেভ করা লোকেশন Download/FakeGPS ফোল্ডারে অটোমেটিক ব্যাকআপ থাকে — অ্যাপ আনইনস্টল করলেও হারাবে না।",
+            fontSize = 10.5.sp,
+            color = Color(0xFF94A3B8),
+            modifier = Modifier.padding(bottom = 20.dp)
+        )
     }
 }
