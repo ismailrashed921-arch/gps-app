@@ -10,9 +10,11 @@ import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Looper
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -266,6 +268,14 @@ fun startAutoCycle(context: android.content.Context, minutes: Int) {
         putExtra(MockLocationService.EXTRA_INTERVAL_MINUTES, minutes)
     }
     ContextCompat.startForegroundService(context, intent)
+}
+
+fun startBubble(context: android.content.Context) {
+    ContextCompat.startForegroundService(context, Intent(context, FloatingBubbleService::class.java))
+}
+
+fun stopBubble(context: android.content.Context) {
+    context.stopService(Intent(context, FloatingBubbleService::class.java))
 }
 
 @SuppressLint("MissingPermission")
@@ -672,6 +682,23 @@ fun SettingsScreen(repo: LocationRepository) {
     val autoCycleState by repo.autoCycleFlow.collectAsState(initial = Pair(false, 10))
     var minutesText by remember(autoCycleState.second) { mutableStateOf(autoCycleState.second.toString()) }
     val savedCount by repo.savedLocationsFlow.collectAsState(initial = emptyList())
+    val bubbleEnabled by repo.bubbleEnabledFlow.collectAsState(initial = false)
+
+    val overlayPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (Settings.canDrawOverlays(context)) {
+            scope.launch { repo.setBubbleEnabled(true) }
+        }
+    }
+
+    LaunchedEffect(bubbleEnabled) {
+        if (bubbleEnabled && Settings.canDrawOverlays(context)) {
+            startBubble(context)
+        } else {
+            stopBubble(context)
+        }
+    }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Text("সেটিংস", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
@@ -685,6 +712,35 @@ fun SettingsScreen(repo: LocationRepository) {
         SettingsToggleRow("র‍্যান্ডম জিটার (±৫ মিটার)", jitter) {
             jitter = it
             scope.launch { repo.setJitter(it) }
+        }
+
+        Spacer(Modifier.height(20.dp))
+        Text(
+            "ফ্লোটিং বাটন",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = TextPrimary
+        )
+        Text(
+            "চালু করলে Facebook, YouTube বা যেকোনো অ্যাপের উপরে একটা ছোট বাটন ভাসবে — ট্যাপ করলে লোকেশন অন/অফ টগল হবে। প্রথমবার \"Display over other apps\" পারমিশন দিতে হবে।",
+            fontSize = 11.sp,
+            color = TextSecondary,
+            modifier = Modifier.padding(top = 4.dp, bottom = 10.dp)
+        )
+        SettingsToggleRow("ফ্লোটিং বাটন চালু করুন", bubbleEnabled) { checked ->
+            if (checked) {
+                if (Settings.canDrawOverlays(context)) {
+                    scope.launch { repo.setBubbleEnabled(true) }
+                } else {
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:${context.packageName}")
+                    )
+                    overlayPermissionLauncher.launch(intent)
+                }
+            } else {
+                scope.launch { repo.setBubbleEnabled(false) }
+            }
         }
 
         Spacer(Modifier.height(20.dp))

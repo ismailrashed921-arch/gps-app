@@ -29,6 +29,7 @@ object PrefKeys {
     val AUTO_CYCLE_MINUTES = intPreferencesKey("auto_cycle_minutes")
     val REAL_LAT = doublePreferencesKey("real_lat")
     val REAL_LNG = doublePreferencesKey("real_lng")
+    val BUBBLE_ENABLED = booleanPreferencesKey("bubble_enabled")
 }
 
 class LocationRepository(private val context: Context) {
@@ -55,6 +56,9 @@ class LocationRepository(private val context: Context) {
                 prefs[PrefKeys.AUTO_CYCLE_MINUTES] ?: 10
             )
         }
+
+    val bubbleEnabledFlow: Flow<Boolean> =
+        context.dataStore.data.map { prefs -> prefs[PrefKeys.BUBBLE_ENABLED] ?: false }
 
     suspend fun getSavedLocations(): List<SavedLocation> = savedLocationsFlow.first()
 
@@ -122,6 +126,10 @@ class LocationRepository(private val context: Context) {
         val lat = prefs[PrefKeys.REAL_LAT]
         val lng = prefs[PrefKeys.REAL_LNG]
         return if (lat != null && lng != null) Pair(lat, lng) else null
+    }
+
+    suspend fun setBubbleEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs -> prefs[PrefKeys.BUBBLE_ENABLED] = enabled }
     }
 
     private fun parseLocations(raw: String): List<SavedLocation> {
