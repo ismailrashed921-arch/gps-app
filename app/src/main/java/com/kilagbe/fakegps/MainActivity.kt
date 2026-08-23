@@ -732,6 +732,7 @@ fun AddLocationDialog(onDismiss: () -> Unit, onConfirm: (String, Double, Double)
 
 @Composable
 fun SavedScreen(repo: LocationRepository, saved: List<SavedLocation>) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var query by remember { mutableStateOf("") }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -820,7 +821,7 @@ fun SavedScreen(repo: LocationRepository, saved: List<SavedLocation>) {
                                 )
                             }
                             Spacer(Modifier.width(12.dp))
-                            Column(Modifier.weight(1f).clickable { startMock(LocalContext_forItem, loc.lat, loc.lng, loc.name) }) {
+                            Column(Modifier.weight(1f).clickable { startMock(context, loc.lat, loc.lng, loc.name) }) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(loc.name, fontWeight = FontWeight.Bold, fontSize = 13.5.sp, color = TextPrimary)
                                     if (isActive) {
