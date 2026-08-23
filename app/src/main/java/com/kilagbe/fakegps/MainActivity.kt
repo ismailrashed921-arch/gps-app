@@ -477,7 +477,7 @@ fun MapScreen(repo: LocationRepository) {
                 IconButton(onClick = { showDialog = true }, modifier = Modifier.size(44.dp)) {
                     Icon(Icons.Filled.Tag, contentDescription = "কোঅর্ডিনেট বসান", tint = TealDark, modifier = Modifier.size(19.dp))
                 }
-                HorizontalDivider(color = BorderColor)
+                HorizontalDivider(color = BorderColor, modifier = Modifier.width(44.dp))
                 IconButton(
                     onClick = {
                         scope.launch {
