@@ -20,7 +20,6 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -87,14 +86,11 @@ class FloatingBubbleService : Service() {
             .build()
     }
 
-    // ---------- Build views ----------
-
-    private fun roundedBg(colorHex: String, radiusDp: Int, strokeHex: String? = null): GradientDrawable {
+    private fun roundedBg(colorHex: String, radiusDp: Int): GradientDrawable {
         return GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = dp(radiusDp).toFloat()
             setColor(Color.parseColor(colorHex))
-            strokeHex?.let { setStroke(dp(1), Color.parseColor(it)) }
         }
     }
 
@@ -123,7 +119,6 @@ class FloatingBubbleService : Service() {
             }
         }
 
-        // header
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), dp(12), dp(14), dp(10))
@@ -147,7 +142,6 @@ class FloatingBubbleService : Service() {
         menu.addView(header)
         menu.addView(divider())
 
-        // scrollable location list
         val scroll = ScrollView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(230)
@@ -159,40 +153,24 @@ class FloatingBubbleService : Service() {
         menu.addView(scroll)
         menu.addView(divider())
 
-        // actions row
-        val actions = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
+        // single full-width stop button
         val stopBtn = TextView(this).apply {
-            text = "✕ বন্ধ করুন"
+            text = "✕  বন্ধ করুন"
             setTextColor(Color.parseColor("#DC2626"))
-            textSize = 12f
+            textSize = 13f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             gravity = Gravity.CENTER
-            setPadding(0, dp(12), 0, dp(12))
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setPadding(0, dp(14), 0, dp(14))
             setOnClickListener {
                 scope.launch { stopMock(applicationContext) }
+                closeMenu()
             }
         }
-        val collapseBtn = TextView(this).apply {
-            text = "গুটিয়ে নিন"
-            setTextColor(Color.parseColor("#64748B"))
-            textSize = 12f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-            gravity = Gravity.CENTER
-            setPadding(0, dp(12), 0, dp(12))
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener { closeMenu() }
-        }
-        actions.addView(stopBtn)
-        actions.addView(collapseBtn)
-        menu.addView(actions)
+        menu.addView(stopBtn)
 
         menuView = menu
         root.addView(menu)
 
-        // ---- bubble circle ----
         val bubbleSize = dp(56)
         val icon = ImageView(this).apply {
             setImageResource(android.R.drawable.ic_menu_mylocation)
@@ -218,7 +196,9 @@ class FloatingBubbleService : Service() {
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             overlayType,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -226,6 +206,14 @@ class FloatingBubbleService : Service() {
             y = dp(300)
         }
         params = p
+
+        // close menu when tapping anywhere outside the overlay (other apps, screen, etc.)
+        root.setOnTouchListener { _, event ->
+            if (event.action == MotionEvent.ACTION_OUTSIDE) {
+                if (menuOpen) closeMenu()
+            }
+            false
+        }
 
         var initialX = 0
         var initialY = 0
@@ -272,8 +260,6 @@ class FloatingBubbleService : Service() {
         setBackgroundColor(Color.parseColor("#F1F5F4"))
     }
 
-    // ---------- Menu open/close ----------
-
     private fun toggleMenu() {
         if (menuOpen) closeMenu() else openMenu()
     }
@@ -282,19 +268,11 @@ class FloatingBubbleService : Service() {
         menuOpen = true
         refreshLocationRows()
         menuView?.visibility = View.VISIBLE
-        try {
-            val p = params ?: return
-            windowManager.updateViewLayout(container, p)
-        } catch (_: Exception) { }
     }
 
     private fun closeMenu() {
         menuOpen = false
         menuView?.visibility = View.GONE
-        try {
-            val p = params ?: return
-            windowManager.updateViewLayout(container, p)
-        } catch (_: Exception) { }
     }
 
     private fun refreshLocationRows() {
@@ -302,6 +280,7 @@ class FloatingBubbleService : Service() {
             savedLocations = repo.getSavedLocations()
             val activeState = repo.activeStateFlow.first()
             buildRows(activeState)
+            updateStatusText(activeState)
         }
     }
 
@@ -354,12 +333,11 @@ class FloatingBubbleService : Service() {
             }
             row.setOnClickListener {
                 startMock(applicationContext, loc.lat, loc.lng, loc.name)
+                closeMenu()
             }
             list.addView(row)
         }
     }
-
-    // ---------- State observing ----------
 
     private fun observeState() {
         collectJob = scope.launch {

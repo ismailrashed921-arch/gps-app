@@ -163,7 +163,6 @@ fun PermissionRequestScreen(onRequestClick: () -> Unit) {
 fun AppRoot() {
     val context = LocalContext.current
     val repo = remember { LocationRepository(context) }
-    val scope = rememberCoroutineScope()
 
     CrashLogDialog(context)
 
@@ -191,8 +190,6 @@ fun AppRoot() {
         }
     }
 
-    // Restore saved locations from the Downloads backup file if the list is empty
-    // (covers reinstall-after-uninstall)
     LaunchedEffect(permissionsGranted) {
         if (permissionsGranted) {
             val restored = repo.restoreFromBackupIfEmpty()
@@ -264,11 +261,15 @@ fun startMock(context: android.content.Context, lat: Double, lng: Double, name: 
     ContextCompat.startForegroundService(context, intent)
 }
 
+// IMPORTANT: stopping must NOT use startForegroundService — the STOP branch never calls
+// startForeground(), which crashes the app on Android 12+ (ForegroundServiceDidNotStartInTimeException).
+// A plain startService() is enough here since the service is already running in foreground
+// when there's anything to stop.
 fun stopMock(context: android.content.Context) {
     val intent = Intent(context, MockLocationService::class.java).apply {
         action = MockLocationService.ACTION_STOP
     }
-    ContextCompat.startForegroundService(context, intent)
+    context.startService(intent)
 }
 
 fun startAutoCycle(context: android.content.Context, minutes: Int) {
@@ -433,7 +434,6 @@ fun MapScreen(repo: LocationRepository) {
             modifier = Modifier.align(Alignment.Center).size(40.dp)
         )
 
-        // ---- Status pill ----
         Surface(
             modifier = Modifier.align(Alignment.TopCenter).padding(top = 14.dp),
             shape = RoundedCornerShape(50),
@@ -466,14 +466,13 @@ fun MapScreen(repo: LocationRepository) {
             }
         }
 
-        // ---- Toolbar (coordinate + recenter) ----
         Surface(
             modifier = Modifier.align(Alignment.TopEnd).padding(top = 70.dp, end = 12.dp),
             shape = RoundedCornerShape(16.dp),
             color = SurfaceColor,
-            shadowElevation = 4.dp
+            shadowElevation = 4.dp,
         ) {
-            Column {
+            Column(modifier = Modifier.width(44.dp)) {
                 IconButton(onClick = { showDialog = true }, modifier = Modifier.size(44.dp)) {
                     Icon(Icons.Filled.Tag, contentDescription = "কোঅর্ডিনেট বসান", tint = TealDark, modifier = Modifier.size(19.dp))
                 }
@@ -511,7 +510,6 @@ fun MapScreen(repo: LocationRepository) {
             }
         }
 
-        // ---- Bottom action bar ----
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -932,6 +930,42 @@ fun SettingsIconRow(
 }
 
 @Composable
+fun SettingsActionRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    description: String? = null,
+    buttonText: String,
+    onClick: () -> Unit
+) {
+    Row(
+        Modifier
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .size(34.dp)
+                .background(Color(0xFFE6FBF7), RoundedCornerShape(10.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = TealDark, modifier = Modifier.size(17.dp))
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+            description?.let {
+                Text(it, fontSize = 11.sp, color = Color(0xFF94A3B8), modifier = Modifier.padding(top = 1.dp))
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        TextButton(onClick = onClick) {
+            Text(buttonText, color = Teal, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
 fun SettingsScreen(repo: LocationRepository) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -1051,13 +1085,48 @@ fun SettingsScreen(repo: LocationRepository) {
             }
         }
 
-        Spacer(Modifier.height(24.dp))
+        SettingsSectionLabel("ব্যাকআপ")
+        Surface(shape = RoundedCornerShape(16.dp), color = SurfaceColor, border = BorderStroke(1.dp, BorderColor), modifier = Modifier.fillMaxWidth()) {
+            Column {
+                SettingsActionRow(
+                    icon = Icons.Filled.Save,
+                    title = "এখনই ব্যাকআপ করুন",
+                    description = "Download/FakeGPS ফোল্ডারে JSON ফাইলে সেভ করবে",
+                    buttonText = "ব্যাকআপ"
+                ) {
+                    scope.launch {
+                        val ok = repo.backupNow()
+                        Toast.makeText(
+                            context,
+                            if (ok) "ব্যাকআপ সফল হয়েছে" else "ব্যাকআপ ব্যর্থ হয়েছে",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+                HorizontalDivider(color = BorderColor)
+                SettingsActionRow(
+                    icon = Icons.Filled.Restore,
+                    title = "ব্যাকআপ থেকে ফিরিয়ে আনুন",
+                    description = "ব্যাকআপ ফাইলের নতুন লোকেশনগুলো যোগ করবে",
+                    buttonText = "রিস্টোর"
+                ) {
+                    scope.launch {
+                        val count = repo.restoreFromBackupMerge()
+                        Toast.makeText(
+                            context,
+                            if (count > 0) "$count টি লোকেশন ফিরিয়ে আনা হয়েছে" else "নতুন কিছু পাওয়া যায়নি",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            }
+        }
 
         Text(
-            "সেভ করা লোকেশন Download/FakeGPS ফোল্ডারে অটোমেটিক ব্যাকআপ থাকে — অ্যাপ আনইনস্টল করলেও হারাবে না।",
+            "সেভ করা লোকেশন প্রতিবার আপডেট হওয়ার সময় Download/FakeGPS ফোল্ডারে অটোমেটিক ব্যাকআপ হয় — অ্যাপ আনইনস্টল করলেও হারাবে না।",
             fontSize = 10.5.sp,
             color = Color(0xFF94A3B8),
-            modifier = Modifier.padding(bottom = 20.dp)
+            modifier = Modifier.padding(top = 16.dp, bottom = 24.dp)
         )
     }
 }

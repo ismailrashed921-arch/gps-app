@@ -15,15 +15,16 @@ object LocalBackupManager {
     private const val BACKUP_DIR = "FakeGPS"
     private const val BACKUP_FILE = "saved_locations_backup.json"
 
-    fun writeBackup(context: Context, locations: List<SavedLocation>) {
-        try {
+    fun writeBackup(context: Context, locations: List<SavedLocation>): Boolean {
+        return try {
             val json = toJson(locations)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 writeViaMediaStore(context, json)
             } else {
                 writeViaLegacyFile(json)
             }
-        } catch (_: Exception) { }
+            true
+        } catch (_: Exception) { false }
     }
 
     fun readBackup(context: Context): List<SavedLocation>? {
@@ -89,7 +90,7 @@ object LocalBackupManager {
         }
         uri?.let {
             resolver.openOutputStream(it, "wt")?.use { out -> out.write(json.toByteArray()) }
-        }
+        } ?: throw Exception("MediaStore insert failed")
     }
 
     private fun readViaMediaStore(context: Context): String? {
