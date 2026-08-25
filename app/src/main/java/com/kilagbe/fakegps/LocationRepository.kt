@@ -1,6 +1,7 @@
 package com.kilagbe.fakegps
 
 import android.content.Context
+import android.net.Uri
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -87,14 +88,25 @@ class LocationRepository(private val context: Context) {
         return LocalBackupManager.writeBackup(context, getSavedLocations())
     }
 
-    /** Merges backup locations into the current list (by name), doesn't overwrite existing ones.
-     *  Returns how many new locations were added. */
+    /** Merges backup locations (auto-detected via MediaStore) into the current list.
+     *  Returns: -1 if no backup file could be found/read at all, otherwise the count of newly added locations. */
     suspend fun restoreFromBackupMerge(): Int {
-        val backup = LocalBackupManager.readBackup(context) ?: return 0
-        if (backup.isEmpty()) return 0
+        val backup = LocalBackupManager.readBackup(context) ?: return -1
+        return mergeIn(backup)
+    }
+
+    /** Merges backup locations from a user-picked file (SAF). Bypasses MediaStore entirely —
+     *  use this if the automatic restore can't find the file (common on MIUI after reinstall). */
+    suspend fun restoreFromUri(uri: Uri): Int {
+        val items = LocalBackupManager.readFromUri(context, uri) ?: return -1
+        return mergeIn(items)
+    }
+
+    private suspend fun mergeIn(items: List<SavedLocation>): Int {
+        if (items.isEmpty()) return 0
         val current = getSavedLocations()
         val currentNames = current.map { it.name }.toSet()
-        val toAdd = backup.filterNot { it.name in currentNames }
+        val toAdd = items.filterNot { it.name in currentNames }
         if (toAdd.isEmpty()) return 0
         persist(current + toAdd)
         return toAdd.size

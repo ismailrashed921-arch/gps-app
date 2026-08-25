@@ -38,6 +38,17 @@ object LocalBackupManager {
         } catch (_: Exception) { null }
     }
 
+    /** Reads a backup JSON from a user-picked file (via Storage Access Framework).
+     *  This bypasses MediaStore entirely, so it works even on OEMs (MIUI etc.)
+     *  that restrict MediaStore visibility after an app reinstall. */
+    fun readFromUri(context: Context, uri: Uri): List<SavedLocation>? {
+        return try {
+            val text = context.contentResolver.openInputStream(uri)
+                ?.use { it.readBytes().decodeToString() } ?: return null
+            fromJson(text)
+        } catch (_: Exception) { null }
+    }
+
     private fun toJson(locations: List<SavedLocation>): String {
         val arr = JSONArray()
         locations.forEach {

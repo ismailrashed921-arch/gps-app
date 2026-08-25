@@ -261,10 +261,6 @@ fun startMock(context: android.content.Context, lat: Double, lng: Double, name: 
     ContextCompat.startForegroundService(context, intent)
 }
 
-// IMPORTANT: stopping must NOT use startForegroundService — the STOP branch never calls
-// startForeground(), which crashes the app on Android 12+ (ForegroundServiceDidNotStartInTimeException).
-// A plain startService() is enough here since the service is already running in foreground
-// when there's anything to stop.
 fun stopMock(context: android.content.Context) {
     val intent = Intent(context, MockLocationService::class.java).apply {
         action = MockLocationService.ACTION_STOP
@@ -470,7 +466,7 @@ fun MapScreen(repo: LocationRepository) {
             modifier = Modifier.align(Alignment.TopEnd).padding(top = 70.dp, end = 12.dp),
             shape = RoundedCornerShape(16.dp),
             color = SurfaceColor,
-            shadowElevation = 4.dp,
+            shadowElevation = 4.dp
         ) {
             Column(modifier = Modifier.width(44.dp)) {
                 IconButton(onClick = { showDialog = true }, modifier = Modifier.size(44.dp)) {
@@ -984,6 +980,25 @@ fun SettingsScreen(repo: LocationRepository) {
         }
     }
 
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            scope.launch {
+                val count = repo.restoreFromUri(uri)
+                Toast.makeText(
+                    context,
+                    when {
+                        count < 0 -> "ফাইল পড়া যায়নি — এটা কি সঠিক ব্যাকআপ ফাইল?"
+                        count == 0 -> "নতুন কিছু পাওয়া যায়নি (সব আগে থেকেই আছে)"
+                        else -> "$count টি লোকেশন ফিরিয়ে আনা হয়েছে"
+                    },
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
     LaunchedEffect(bubbleEnabled) {
         if (bubbleEnabled && Settings.canDrawOverlays(context)) {
             startBubble(context)
@@ -1106,24 +1121,37 @@ fun SettingsScreen(repo: LocationRepository) {
                 HorizontalDivider(color = BorderColor)
                 SettingsActionRow(
                     icon = Icons.Filled.Restore,
-                    title = "ব্যাকআপ থেকে ফিরিয়ে আনুন",
-                    description = "ব্যাকআপ ফাইলের নতুন লোকেশনগুলো যোগ করবে",
+                    title = "স্বয়ংক্রিয় রিস্টোর",
+                    description = "ফোন নিজে থেকে ব্যাকআপ ফাইল খুঁজে বের করবে",
                     buttonText = "রিস্টোর"
                 ) {
                     scope.launch {
                         val count = repo.restoreFromBackupMerge()
                         Toast.makeText(
                             context,
-                            if (count > 0) "$count টি লোকেশন ফিরিয়ে আনা হয়েছে" else "নতুন কিছু পাওয়া যায়নি",
-                            Toast.LENGTH_SHORT
+                            when {
+                                count < 0 -> "ব্যাকআপ ফাইল খুঁজে পাওয়া যায়নি — নিচের অপশন দিয়ে ম্যানুয়ালি বেছে নাও"
+                                count == 0 -> "নতুন কিছু পাওয়া যায়নি (সব আগে থেকেই আছে)"
+                                else -> "$count টি লোকেশন ফিরিয়ে আনা হয়েছে"
+                            },
+                            Toast.LENGTH_LONG
                         ).show()
                     }
+                }
+                HorizontalDivider(color = BorderColor)
+                SettingsActionRow(
+                    icon = Icons.Filled.FolderOpen,
+                    title = "ব্যাকআপ ফাইল থেকে বেছে নিন",
+                    description = "স্বয়ংক্রিয় রিস্টোর কাজ না করলে এটা ব্যবহার করো (১০০% কাজ করে)",
+                    buttonText = "বেছে নিন"
+                ) {
+                    filePickerLauncher.launch(arrayOf("application/json", "*/*"))
                 }
             }
         }
 
         Text(
-            "সেভ করা লোকেশন প্রতিবার আপডেট হওয়ার সময় Download/FakeGPS ফোল্ডারে অটোমেটিক ব্যাকআপ হয় — অ্যাপ আনইনস্টল করলেও হারাবে না।",
+            "সেভ করা লোকেশন প্রতিবার আপডেট হওয়ার সময় Download/FakeGPS ফোল্ডারে অটোমেটিক ব্যাকআপ হয় — অ্যাপ আনইনস্টল করলেও হারাবে না। কোনো কারণে স্বয়ংক্রিয় রিস্টোর কাজ না করলে \"ব্যাকআপ ফাইল থেকে বেছে নিন\" ব্যবহার করো।",
             fontSize = 10.5.sp,
             color = Color(0xFF94A3B8),
             modifier = Modifier.padding(top = 16.dp, bottom = 24.dp)
