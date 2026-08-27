@@ -13,6 +13,7 @@ import java.io.File
 
 object LocalBackupManager {
     var lastError: String? = null
+
     private const val BACKUP_DIR = "FakeGPS"
     private const val BACKUP_FILE = "saved_locations_backup.json"
 
@@ -25,7 +26,10 @@ object LocalBackupManager {
                 writeViaLegacyFile(json)
             }
             true
-        } catch (e: Exception) { lastError = e.message ?: e.toString(); false }
+        } catch (e: Exception) {
+            lastError = e.message ?: e.toString()
+            false
+        }
     }
 
     fun readBackup(context: Context): List<SavedLocation>? {
@@ -39,9 +43,6 @@ object LocalBackupManager {
         } catch (_: Exception) { null }
     }
 
-    /** Reads a backup JSON from a user-picked file (via Storage Access Framework).
-     *  This bypasses MediaStore entirely, so it works even on OEMs (MIUI etc.)
-     *  that restrict MediaStore visibility after an app reinstall. */
     fun readFromUri(context: Context, uri: Uri): List<SavedLocation>? {
         return try {
             val text = context.contentResolver.openInputStream(uri)
@@ -89,20 +90,35 @@ object LocalBackupManager {
         return null
     }
 
+    /** Removes any stale/duplicate/orphaned entries with our filename (any relative path,
+     *  including trashed/pending ones some OEMs leave behind) — this is what causes
+     *  "Failed to build unique file" on repeated writes on some devices (e.g. MIUI). */
+    private fun cleanupStaleEntries(context: Context) {
+        try {
+            val resolver = context.contentResolver
+            val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+            val selection = "${MediaStore.Downloads.DISPLAY_NAME}=?"
+            val selectionArgs = arrayOf(BACKUP_FILE)
+            resolver.delete(collection, selection, selectionArgs)
+        } catch (_: Exception) { }
+    }
+
     private fun writeViaMediaStore(context: Context, json: String) {
         val resolver = context.contentResolver
         val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
-        val uri = findExistingUri(context) ?: run {
-            val values = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, BACKUP_FILE)
-                put(MediaStore.Downloads.MIME_TYPE, "application/json")
-                put(MediaStore.Downloads.RELATIVE_PATH, relativePath())
-            }
-            resolver.insert(collection, values)
+
+        cleanupStaleEntries(context)
+
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, BACKUP_FILE)
+            put(MediaStore.Downloads.MIME_TYPE, "application/json")
+            put(MediaStore.Downloads.RELATIVE_PATH, relativePath())
         }
-        uri?.let {
-            resolver.openOutputStream(it, "wt")?.use { out -> out.write(json.toByteArray()) }
-        } ?: throw Exception("MediaStore insert failed")
+        val uri = resolver.insert(collection, values)
+            ?: throw Exception("MediaStore insert returned null URI")
+
+        resolver.openOutputStream(uri, "wt")?.use { out -> out.write(json.toByteArray()) }
+            ?: throw Exception("Could not open output stream for backup file")
     }
 
     private fun readViaMediaStore(context: Context): String? {
