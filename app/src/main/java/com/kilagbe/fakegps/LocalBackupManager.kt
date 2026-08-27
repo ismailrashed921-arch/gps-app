@@ -73,14 +73,15 @@ object LocalBackupManager {
         return list
     }
 
-    private fun relativePath(): String = Environment.DIRECTORY_DOWNLOADS + "/" + BACKUP_DIR + "/"
-
+    /** Finds any existing entry with our filename, regardless of exact relative-path
+     *  formatting (some OEMs like MIUI store/query paths inconsistently — with or
+     *  without trailing slash), so we use LIKE instead of exact match. */
     private fun findExistingUri(context: Context): Uri? {
         val resolver = context.contentResolver
         val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
         val projection = arrayOf(MediaStore.Downloads._ID)
-        val selection = "${MediaStore.Downloads.DISPLAY_NAME}=? AND ${MediaStore.Downloads.RELATIVE_PATH}=?"
-        val selectionArgs = arrayOf(BACKUP_FILE, relativePath())
+        val selection = "${MediaStore.Downloads.DISPLAY_NAME}=?"
+        val selectionArgs = arrayOf(BACKUP_FILE)
         resolver.query(collection, projection, selection, selectionArgs, null)?.use { cursor ->
             if (cursor.moveToFirst()) {
                 val id = cursor.getLong(0)
@@ -90,32 +91,24 @@ object LocalBackupManager {
         return null
     }
 
-    /** Removes any stale/duplicate/orphaned entries with our filename (any relative path,
-     *  including trashed/pending ones some OEMs leave behind) — this is what causes
-     *  "Failed to build unique file" on repeated writes on some devices (e.g. MIUI). */
-    private fun cleanupStaleEntries(context: Context) {
-        try {
-            val resolver = context.contentResolver
-            val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
-            val selection = "${MediaStore.Downloads.DISPLAY_NAME}=?"
-            val selectionArgs = arrayOf(BACKUP_FILE)
-            resolver.delete(collection, selection, selectionArgs)
-        } catch (_: Exception) { }
-    }
+    private fun relativePath(): String = Environment.DIRECTORY_DOWNLOADS + "/" + BACKUP_DIR + "/"
 
     private fun writeViaMediaStore(context: Context, json: String) {
         val resolver = context.contentResolver
         val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
 
-        cleanupStaleEntries(context)
-
-        val values = ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME, BACKUP_FILE)
-            put(MediaStore.Downloads.MIME_TYPE, "application/json")
-            put(MediaStore.Downloads.RELATIVE_PATH, relativePath())
-        }
-        val uri = resolver.insert(collection, values)
-            ?: throw Exception("MediaStore insert returned null URI")
+        // Reuse the existing entry if one is found — this avoids asking MediaStore to
+        // create a brand-new "unique" filename, which is what fails on some OEMs when a
+        // stale/orphaned entry with the same name already exists.
+        val existingUri = findExistingUri(context)
+        val uri = existingUri ?: resolver.insert(
+            collection,
+            ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, BACKUP_FILE)
+                put(MediaStore.Downloads.MIME_TYPE, "application/json")
+                put(MediaStore.Downloads.RELATIVE_PATH, relativePath())
+            }
+        ) ?: throw Exception("MediaStore insert returned null URI")
 
         resolver.openOutputStream(uri, "wt")?.use { out -> out.write(json.toByteArray()) }
             ?: throw Exception("Could not open output stream for backup file")
