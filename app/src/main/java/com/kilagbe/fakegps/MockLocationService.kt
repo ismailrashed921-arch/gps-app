@@ -32,7 +32,7 @@ class MockLocationService : Service() {
 
         private val PROVIDERS: List<String>
             get() {
-                val list = mutableListOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+                val list = mutableListOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER, LocationManager.PASSIVE_PROVIDER)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     list.add(LocationManager.FUSED_PROVIDER)
                 } else {
