@@ -1113,7 +1113,7 @@ fun SettingsScreen(repo: LocationRepository) {
                         val ok = repo.backupNow()
                         Toast.makeText(
                             context,
-                            if (ok) "ব্যাকআপ সফল হয়েছে" else "ব্যাকআপ ব্যর্থ হয়েছে",
+                            if (ok) "ব্যাকআপ সফল হয়েছে" else "ব্যাকআপ ব্যর্থ: ${LocalBackupManager.lastError}",
                             Toast.LENGTH_SHORT
                         ).show()
                     }

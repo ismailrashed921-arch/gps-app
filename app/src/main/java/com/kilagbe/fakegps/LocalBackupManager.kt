@@ -12,6 +12,7 @@ import org.json.JSONObject
 import java.io.File
 
 object LocalBackupManager {
+    var lastError: String? = null
     private const val BACKUP_DIR = "FakeGPS"
     private const val BACKUP_FILE = "saved_locations_backup.json"
 
@@ -24,7 +25,7 @@ object LocalBackupManager {
                 writeViaLegacyFile(json)
             }
             true
-        } catch (_: Exception) { false }
+        } catch (e: Exception) { lastError = e.message ?: e.toString(); false }
     }
 
     fun readBackup(context: Context): List<SavedLocation>? {
