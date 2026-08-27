@@ -69,7 +69,7 @@ class FloatingBubbleService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = getSystemService(NotificationManager::class.java)
             val channel = NotificationChannel(
-                CHANNEL_ID, "ফ্লোটিং বাটন", NotificationManager.IMPORTANCE_MIN
+                CHANNEL_ID, "ব্যাকগ্রাউন্ড সার্ভিস", NotificationManager.IMPORTANCE_MIN
             )
             manager.createNotificationChannel(channel)
         }
@@ -78,8 +78,8 @@ class FloatingBubbleService : Service() {
             this, 0, openIntent, PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-            .setContentTitle("ফ্লোটিং বাটন চালু আছে")
+            .setSmallIcon(android.R.drawable.presence_online)
+            .setContentTitle("সার্ভিস চালু আছে")
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_MIN)
@@ -173,8 +173,6 @@ class FloatingBubbleService : Service() {
 
         val bubbleSize = dp(56)
         val icon = ImageView(this).apply {
-            setImageResource(android.R.drawable.ic_menu_mylocation)
-            setColorFilter(Color.WHITE)
             val pad = bubbleSize / 4
             setPadding(pad, pad, pad, pad)
         }
