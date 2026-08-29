@@ -2,6 +2,7 @@ package com.kilagbe.fakegps
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -74,6 +75,68 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+}
+
+/** Checks whether this app is currently selected as the system's mock location app
+ *  (Developer Options > Select mock location app). If not, addTestProvider throws
+ *  SecurityException and location changes silently do nothing — this lets us detect
+ *  that up front and tell the user, instead of the app appearing to "just not work". */
+fun isMockLocationAllowed(context: Context): Boolean {
+    val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    val probeProvider = "fakegps_probe_provider"
+    return try {
+        lm.addTestProvider(
+            probeProvider,
+            false, false, false, false, false, false, false,
+            android.location.Criteria.POWER_LOW,
+            android.location.Criteria.ACCURACY_FINE
+        )
+        try { lm.removeTestProvider(probeProvider) } catch (_: Exception) { }
+        true
+    } catch (e: SecurityException) {
+        false
+    } catch (_: Exception) {
+        // Any other failure isn't a permission problem — don't block the user for it.
+        true
+    }
+}
+
+fun openDeveloperOptions(context: Context) {
+    try {
+        context.startActivity(
+            Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    } catch (_: ActivityNotFoundException) {
+        try {
+            context.startActivity(
+                Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (_: Exception) { }
+    }
+}
+
+@Composable
+fun MockNotEnabledDialog(onDismiss: () -> Unit, onOpenSettings: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Mock Location চালু নাই") },
+        text = {
+            Text(
+                "এই অ্যাপ কাজ করার জন্য Developer Options এ গিয়ে \"Select mock location app\" থেকে " +
+                    "এই অ্যাপটা বেছে নিতে হবে। একবার বেছে নিলেই বাকি সব ফিচার ঠিকমতো কাজ করবে।\n\n" +
+                    "ব্যবহার শেষে এই সেটিং বন্ধ করে রাখাই ভালো, যাতে ভুলবশত অন্য কোনো অ্যাপে সমস্যা না হয়।",
+                fontSize = 13.sp,
+                color = TextSecondary
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onOpenSettings) { Text("ডেভেলপার অপশনে যান", color = Teal, fontWeight = FontWeight.Bold) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("বাতিল") }
+        }
+    )
 }
 
 @Composable
@@ -211,7 +274,10 @@ fun AppRoot() {
     }
 
     var tab by remember { mutableStateOf("map") }
+    var showMockWarning by remember { mutableStateOf(false) }
     val saved by repo.savedLocationsFlow.collectAsState(initial = emptyList())
+
+    val onMockDisabled: () -> Unit = { showMockWarning = true }
 
     Scaffold(
         containerColor = BgColor,
@@ -243,12 +309,32 @@ fun AppRoot() {
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (tab) {
-                "map" -> MapScreen(repo)
-                "saved" -> SavedScreen(repo = repo, saved = saved)
+                "map" -> MapScreen(repo, onMockDisabled)
+                "saved" -> SavedScreen(repo = repo, saved = saved, onMockDisabled = onMockDisabled)
                 "settings" -> SettingsScreen(repo)
             }
         }
     }
+
+    if (showMockWarning) {
+        MockNotEnabledDialog(
+            onDismiss = { showMockWarning = false },
+            onOpenSettings = {
+                showMockWarning = false
+                openDeveloperOptions(context)
+            }
+        )
+    }
+}
+
+/** Checks mock-location permission before starting; if disabled, calls onMockDisabled
+ *  instead of silently failing. Use this from the UI instead of calling startMock directly. */
+fun trySetMock(context: Context, lat: Double, lng: Double, name: String, onMockDisabled: () -> Unit) {
+    if (!isMockLocationAllowed(context)) {
+        onMockDisabled()
+        return
+    }
+    startMock(context, lat, lng, name)
 }
 
 fun startMock(context: android.content.Context, lat: Double, lng: Double, name: String) {
@@ -312,7 +398,7 @@ fun fetchCurrentLocation(context: Context, onResult: (Double, Double) -> Unit) {
 }
 
 @Composable
-fun MapScreen(repo: LocationRepository) {
+fun MapScreen(repo: LocationRepository, onMockDisabled: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var centerLat by remember { mutableStateOf(23.8103) }
@@ -372,7 +458,7 @@ fun MapScreen(repo: LocationRepository) {
                     centerLat = loc.lat
                     centerLng = loc.lng
                     jumpTarget = GeoPoint(loc.lat, loc.lng)
-                    startMock(context, loc.lat, loc.lng, loc.name)
+                    trySetMock(context, loc.lat, loc.lng, loc.name, onMockDisabled)
                     m.showInfoWindow()
                     true
                 }
@@ -543,7 +629,7 @@ fun MapScreen(repo: LocationRepository) {
                 }
             } else {
                 Surface(
-                    onClick = { startMock(context, centerLat, centerLng, "কাস্টম") },
+                    onClick = { trySetMock(context, centerLat, centerLng, "কাস্টম", onMockDisabled) },
                     shape = RoundedCornerShape(50),
                     color = Teal,
                     shadowElevation = 6.dp,
@@ -724,8 +810,6 @@ fun AddLocationDialog(onDismiss: () -> Unit, onConfirm: (String, Double, Double)
     )
 }
 
-/** Lets the user tap saved locations in order to build the auto-cycle route.
- *  First tap = Start, last tap = End. Tapping a selected item again removes it. */
 @Composable
 fun CycleLocationPickerDialog(
     allLocations: List<SavedLocation>,
@@ -817,7 +901,7 @@ fun CycleLocationPickerDialog(
 }
 
 @Composable
-fun SavedScreen(repo: LocationRepository, saved: List<SavedLocation>) {
+fun SavedScreen(repo: LocationRepository, saved: List<SavedLocation>, onMockDisabled: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var query by remember { mutableStateOf("") }
@@ -907,7 +991,7 @@ fun SavedScreen(repo: LocationRepository, saved: List<SavedLocation>) {
                                 )
                             }
                             Spacer(Modifier.width(12.dp))
-                            Column(Modifier.weight(1f).clickable { startMock(context, loc.lat, loc.lng, loc.name) }) {
+                            Column(Modifier.weight(1f).clickable { trySetMock(context, loc.lat, loc.lng, loc.name, onMockDisabled) }) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(loc.name, fontWeight = FontWeight.Bold, fontSize = 13.5.sp, color = TextPrimary)
                                     if (isActive) {
