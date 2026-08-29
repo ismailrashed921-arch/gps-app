@@ -28,7 +28,7 @@ class MockLocationService : Service() {
         const val EXTRA_NAME = "extra_name"
         const val EXTRA_INTERVAL_MINUTES = "extra_interval_minutes"
         const val NOTIF_ID = 1001
-        private const val PUSH_INTERVAL_MS = 1000L
+        private const val PUSH_INTERVAL_MS = 250L
 
         private val PROVIDERS: List<String>
             get() {
@@ -179,7 +179,7 @@ class MockLocationService : Service() {
                 latitude = lat
                 longitude = lng
                 altitude = 0.0
-                accuracy = 3f
+                accuracy = 1f
                 time = System.currentTimeMillis()
                 elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
