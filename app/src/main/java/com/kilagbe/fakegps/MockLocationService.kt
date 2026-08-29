@@ -104,12 +104,14 @@ class MockLocationService : Service() {
             repo.setAutoCycle(true, minutes)
             var index = 0
             while (cyclingActive) {
-                val saved = repo.getSavedLocations()
-                if (saved.isEmpty()) {
+                // Uses the user's selected Start→End location order if set,
+                // otherwise falls back to all saved locations.
+                val cycleList = repo.getCycleLocations()
+                if (cycleList.isEmpty()) {
                     delay(5000)
                     continue
                 }
-                val loc = saved[index % saved.size]
+                val loc = cycleList[index % cycleList.size]
                 currentLat = loc.lat
                 currentLng = loc.lng
                 currentName = loc.name
@@ -161,7 +163,7 @@ class MockLocationService : Service() {
             while (true) {
                 pushLocation(lm)
                 tick++
-                if (tick % 5 == 0) {
+                if (tick % 20 == 0) {
                     NotificationManagerCompat.from(this@MockLocationService)
                         .notify(NOTIF_ID, NotificationHelper.build(this@MockLocationService, true, currentName))
                 }

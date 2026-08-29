@@ -724,6 +724,98 @@ fun AddLocationDialog(onDismiss: () -> Unit, onConfirm: (String, Double, Double)
     )
 }
 
+/** Lets the user tap saved locations in order to build the auto-cycle route.
+ *  First tap = Start, last tap = End. Tapping a selected item again removes it. */
+@Composable
+fun CycleLocationPickerDialog(
+    allLocations: List<SavedLocation>,
+    initialSelection: List<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (List<String>) -> Unit
+) {
+    var selection by remember { mutableStateOf(initialSelection) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("অটো সাইকেলের ক্রম বাছাই করুন") },
+        text = {
+            Column {
+                Text(
+                    "যেই ক্রমে ট্যাপ করবে সেই ক্রমেই ঘুরবে — প্রথমটা Start, শেষেরটা End। কিছু বাছাই না করলে সব লোকেশন দিয়ে ঘুরবে।",
+                    fontSize = 11.5.sp,
+                    color = TextSecondary,
+                    modifier = Modifier.padding(bottom = 10.dp)
+                )
+                Column(
+                    Modifier
+                        .heightIn(max = 340.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    allLocations.forEach { loc ->
+                        val order = selection.indexOf(loc.name)
+                        val isSelected = order >= 0
+                        val label = when {
+                            !isSelected -> null
+                            order == 0 -> "Start"
+                            order == selection.size - 1 -> "End"
+                            else -> "${order + 1}"
+                        }
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    selection = if (isSelected) {
+                                        selection.filterNot { it == loc.name }
+                                    } else {
+                                        selection + loc.name
+                                    }
+                                }
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(28.dp)
+                                    .background(
+                                        if (isSelected) Teal else Color(0xFFE6FBF7),
+                                        CircleShape
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (label != null) {
+                                    Text(label, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                } else {
+                                    Icon(Icons.Filled.LocationOn, contentDescription = null, tint = TealDark, modifier = Modifier.size(14.dp))
+                                }
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                loc.name,
+                                fontSize = 13.5.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                color = if (isSelected) TextPrimary else TextSecondary,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+                if (selection.isNotEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    TextButton(onClick = { selection = emptyList() }) {
+                        Text("বাছাই মুছে ফেলুন (সব লোকেশন ব্যবহার হবে)", fontSize = 11.5.sp, color = Color(0xFFDC2626))
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(selection) }) { Text("সেভ করুন", color = Teal) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("বাতিল") }
+        }
+    )
+}
+
 @Composable
 fun SavedScreen(repo: LocationRepository, saved: List<SavedLocation>) {
     val context = LocalContext.current
@@ -969,8 +1061,10 @@ fun SettingsScreen(repo: LocationRepository) {
     var jitter by remember { mutableStateOf(false) }
     val autoCycleState by repo.autoCycleFlow.collectAsState(initial = Pair(false, 10))
     var minutesText by remember(autoCycleState.second) { mutableStateOf(autoCycleState.second.toString()) }
-    val savedCount by repo.savedLocationsFlow.collectAsState(initial = emptyList())
+    val savedLocations by repo.savedLocationsFlow.collectAsState(initial = emptyList())
+    val cycleNames by repo.cycleLocationNamesFlow.collectAsState(initial = emptyList())
     val bubbleEnabled by repo.bubbleEnabledFlow.collectAsState(initial = false)
+    var showCyclePicker by remember { mutableStateOf(false) }
 
     val overlayPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -1060,7 +1154,7 @@ fun SettingsScreen(repo: LocationRepository) {
                 ) { checked ->
                     val minutes = minutesText.toIntOrNull()?.coerceAtLeast(1) ?: 10
                     if (checked) {
-                        if (savedCount.isEmpty()) return@SettingsIconRow
+                        if (savedLocations.isEmpty()) return@SettingsIconRow
                         scope.launch { repo.setAutoCycle(true, minutes) }
                         startAutoCycle(context, minutes)
                     } else {
@@ -1068,7 +1162,7 @@ fun SettingsScreen(repo: LocationRepository) {
                         stopMock(context)
                     }
                 }
-                if (savedCount.isEmpty()) {
+                if (savedLocations.isEmpty()) {
                     Text(
                         "প্রথমে অন্তত একটা লোকেশন সেভ করুন",
                         color = Color(0xFFDC2626),
@@ -1096,6 +1190,18 @@ fun SettingsScreen(repo: LocationRepository) {
                         singleLine = true,
                         modifier = Modifier.width(110.dp)
                     )
+                }
+                HorizontalDivider(color = BorderColor)
+                SettingsActionRow(
+                    icon = Icons.Filled.Route,
+                    title = "লোকেশন বাছাই করুন (Start → End)",
+                    description = if (cycleNames.isEmpty())
+                        "এখন সব লোকেশন দিয়ে ঘুরছে"
+                    else
+                        "${cycleNames.size}টি লোকেশন বাছাই করা: ${cycleNames.joinToString(" → ")}",
+                    buttonText = "বাছাই করুন"
+                ) {
+                    showCyclePicker = true
                 }
             }
         }
@@ -1155,6 +1261,18 @@ fun SettingsScreen(repo: LocationRepository) {
             fontSize = 10.5.sp,
             color = Color(0xFF94A3B8),
             modifier = Modifier.padding(top = 16.dp, bottom = 24.dp)
+        )
+    }
+
+    if (showCyclePicker) {
+        CycleLocationPickerDialog(
+            allLocations = savedLocations,
+            initialSelection = cycleNames,
+            onDismiss = { showCyclePicker = false },
+            onConfirm = { names ->
+                scope.launch { repo.setCycleLocationNames(names) }
+                showCyclePicker = false
+            }
         )
     }
 }

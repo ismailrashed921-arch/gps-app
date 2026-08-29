@@ -28,6 +28,7 @@ object PrefKeys {
     val JITTER = booleanPreferencesKey("jitter")
     val AUTO_CYCLE = booleanPreferencesKey("auto_cycle")
     val AUTO_CYCLE_MINUTES = intPreferencesKey("auto_cycle_minutes")
+    val CYCLE_LOCATION_NAMES = stringPreferencesKey("cycle_location_names")
     val REAL_LAT = doublePreferencesKey("real_lat")
     val REAL_LNG = doublePreferencesKey("real_lng")
     val BUBBLE_ENABLED = booleanPreferencesKey("bubble_enabled")
@@ -58,10 +59,36 @@ class LocationRepository(private val context: Context) {
             )
         }
 
+    /** Ordered list of location names selected for the auto-cycle rotation.
+     *  Empty means "use all saved locations" (backward compatible default). */
+    val cycleLocationNamesFlow: Flow<List<String>> =
+        context.dataStore.data.map { prefs ->
+            val raw = prefs[PrefKeys.CYCLE_LOCATION_NAMES] ?: "[]"
+            val arr = JSONArray(raw)
+            (0 until arr.length()).map { arr.getString(it) }
+        }
+
     val bubbleEnabledFlow: Flow<Boolean> =
         context.dataStore.data.map { prefs -> prefs[PrefKeys.BUBBLE_ENABLED] ?: false }
 
     suspend fun getSavedLocations(): List<SavedLocation> = savedLocationsFlow.first()
+
+    /** Returns the ordered list of locations to actually cycle through:
+     *  the user's selection if any, filtered to only locations that still exist,
+     *  otherwise falls back to all saved locations. */
+    suspend fun getCycleLocations(): List<SavedLocation> {
+        val all = getSavedLocations()
+        val selectedNames = cycleLocationNamesFlow.first()
+        if (selectedNames.isEmpty()) return all
+        val byName = all.associateBy { it.name }
+        return selectedNames.mapNotNull { byName[it] }
+    }
+
+    suspend fun setCycleLocationNames(names: List<String>) {
+        val arr = JSONArray()
+        names.forEach { arr.put(it) }
+        context.dataStore.edit { prefs -> prefs[PrefKeys.CYCLE_LOCATION_NAMES] = arr.toString() }
+    }
 
     suspend fun addLocation(loc: SavedLocation) {
         val current = getSavedLocations().toMutableList()
@@ -74,6 +101,9 @@ class LocationRepository(private val context: Context) {
         val current = getSavedLocations().filterNot { it.name == name }
         persist(current)
         FakeGpsWidgetProvider.updateWidgets(context)
+        // keep cycle selection in sync if the removed location was part of it
+        val names = cycleLocationNamesFlow.first()
+        if (name in names) setCycleLocationNames(names.filterNot { it == name })
     }
 
     suspend fun restoreFromBackupIfEmpty(): Boolean {
@@ -88,15 +118,11 @@ class LocationRepository(private val context: Context) {
         return LocalBackupManager.writeBackup(context, getSavedLocations())
     }
 
-    /** Merges backup locations (auto-detected via MediaStore) into the current list.
-     *  Returns: -1 if no backup file could be found/read at all, otherwise the count of newly added locations. */
     suspend fun restoreFromBackupMerge(): Int {
         val backup = LocalBackupManager.readBackup(context) ?: return -1
         return mergeIn(backup)
     }
 
-    /** Merges backup locations from a user-picked file (SAF). Bypasses MediaStore entirely —
-     *  use this if the automatic restore can't find the file (common on MIUI after reinstall). */
     suspend fun restoreFromUri(uri: Uri): Int {
         val items = LocalBackupManager.readFromUri(context, uri) ?: return -1
         return mergeIn(items)
