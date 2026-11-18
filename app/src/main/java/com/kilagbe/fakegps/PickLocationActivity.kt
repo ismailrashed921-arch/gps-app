@@ -80,8 +80,8 @@ fun PickLocationScreen(onDismiss: () -> Unit) {
                     LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
                         items(saved) { loc ->
                             val isActive = activeState.first &&
-                                kotlin.math.abs(loc.lat - activeState.second) < 0.0001 &&
-                                kotlin.math.abs(loc.lng - activeState.third) < 0.0001
+                                kotlin.math.abs(loc.lat - activeState.second) < 0.00001 &&
+                                kotlin.math.abs(loc.lng - activeState.third) < 0.00001
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()

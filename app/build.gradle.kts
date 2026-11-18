@@ -34,6 +34,10 @@ android {
         }
     }
 
+    lint {
+        disable += "MockLocation"
+    }
+
     buildFeatures {
         compose = true
     }
@@ -68,8 +72,7 @@ dependencies {
     // DataStore for saved locations persistence
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
-    // JSON for saved-locations list
-    implementation("org.json:json:20240303")
+    implementation("com.google.android.gms:play-services-location:21.3.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

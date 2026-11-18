@@ -39,12 +39,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.kilagbe.fakegps.ui.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
@@ -76,6 +80,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+class JumpTarget(val point: GeoPoint)
 
 fun isMockLocationAllowed(context: Context): Boolean {
     val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
@@ -199,8 +205,28 @@ fun CrashLogDialog(context: Context) {
     }
 }
 
+fun hasLocationPermission(context: Context): Boolean =
+    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+fun requiredPermissions(): List<String> = buildList {
+    add(Manifest.permission.ACCESS_FINE_LOCATION)
+    add(Manifest.permission.ACCESS_COARSE_LOCATION)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) add(Manifest.permission.POST_NOTIFICATIONS)
+    if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+}
+
+fun openAppSettings(context: Context) {
+    try {
+        context.startActivity(
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    } catch (_: Exception) { }
+}
+
 @Composable
-fun PermissionRequestScreen(onRequestClick: () -> Unit) {
+fun PermissionRequestScreen(onRequestClick: () -> Unit, onOpenSettings: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -237,6 +263,16 @@ fun PermissionRequestScreen(onRequestClick: () -> Unit) {
         ) {
             Text("পারমিশন দিন")
         }
+        Spacer(Modifier.height(8.dp))
+        TextButton(onClick = onOpenSettings) {
+            Text("অ্যাপ সেটিংস খুলুন", color = Teal)
+        }
+        Text(
+            "পারমিশন ডায়ালগ না এলে: সেটিংস → পারমিশন → লোকেশন → \"অ্যাপ ব্যবহারের সময়\" বা \"সবসময়\" বেছে নিন।",
+            fontSize = 11.sp,
+            color = TextSecondary,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
     }
 }
 
@@ -247,28 +283,31 @@ fun AppRoot() {
 
     CrashLogDialog(context)
 
-    var permissionsGranted by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(
-                context, Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-        )
-    }
+    var permissionsGranted by remember { mutableStateOf(hasLocationPermission(context)) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) { results ->
-        permissionsGranted = results[Manifest.permission.ACCESS_FINE_LOCATION] == true
+    ) { _ ->
+        permissionsGranted = hasLocationPermission(context)
+    }
+
+    fun requestPermissions() {
+        permissionLauncher.launch(requiredPermissions().toTypedArray())
     }
 
     LaunchedEffect(Unit) {
-        val permissionsToRequest = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
+        if (!permissionsGranted) requestPermissions()
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                permissionsGranted = hasLocationPermission(context)
+            }
         }
-        if (!permissionsGranted) {
-            permissionLauncher.launch(permissionsToRequest.toTypedArray())
-        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(permissionsGranted) {
@@ -280,21 +319,20 @@ fun AppRoot() {
         }
     }
 
-    var showBatteryDialog by remember { mutableStateOf(false) }
-    LaunchedEffect(permissionsGranted) {
-        if (permissionsGranted && !BatteryOptHelper.isIgnoringBatteryOptimizations(context)) {
-            showBatteryDialog = true
+    val bubbleEnabledRoot by repo.bubbleEnabledFlow.collectAsState(initial = false)
+    LaunchedEffect(bubbleEnabledRoot) {
+        if (bubbleEnabledRoot && Settings.canDrawOverlays(context)) {
+            startBubble(context)
+        } else {
+            stopBubble(context)
         }
     }
 
     if (!permissionsGranted) {
-        PermissionRequestScreen {
-            val permissionsToRequest = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
-            }
-            permissionLauncher.launch(permissionsToRequest.toTypedArray())
-        }
+        PermissionRequestScreen(
+            onRequestClick = { requestPermissions() },
+            onOpenSettings = { openAppSettings(context) }
+        )
         return
     }
 
@@ -384,7 +422,11 @@ fun stopMock(context: android.content.Context) {
     val intent = Intent(context, MockLocationService::class.java).apply {
         action = MockLocationService.ACTION_STOP
     }
-    context.startService(intent)
+    try {
+        context.startService(intent)
+    } catch (_: Exception) {
+        try { ContextCompat.startForegroundService(context, intent) } catch (_: Exception) { }
+    }
 }
 
 fun startAutoCycle(context: android.content.Context, minutes: Int) {
@@ -403,33 +445,6 @@ fun stopBubble(context: android.content.Context) {
     context.stopService(Intent(context, FloatingBubbleService::class.java))
 }
 
-@SuppressLint("MissingPermission")
-fun fetchCurrentLocation(context: Context, onResult: (Double, Double) -> Unit) {
-    val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-    var best: Location? = null
-    for (provider in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
-        try {
-            val loc = lm.getLastKnownLocation(provider)
-            if (loc != null && (best == null || loc.accuracy < best!!.accuracy)) best = loc
-        } catch (_: Exception) { }
-    }
-    if (best != null) {
-        onResult(best.latitude, best.longitude)
-        return
-    }
-    val listener = object : LocationListener {
-        override fun onLocationChanged(location: Location) {
-            onResult(location.latitude, location.longitude)
-            try { lm.removeUpdates(this) } catch (_: Exception) { }
-        }
-    }
-    try {
-        val provider = if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER))
-            LocationManager.GPS_PROVIDER else LocationManager.NETWORK_PROVIDER
-        lm.requestLocationUpdates(provider, 0L, 0f, listener, Looper.getMainLooper())
-    } catch (_: Exception) { }
-}
-
 @Composable
 fun MapScreen(repo: LocationRepository, onMockDisabled: () -> Unit) {
     val context = LocalContext.current
@@ -439,7 +454,8 @@ fun MapScreen(repo: LocationRepository, onMockDisabled: () -> Unit) {
     var showDialog by remember { mutableStateOf(false) }
     var showSaveDialog by remember { mutableStateOf(false) }
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
-    var jumpTarget by remember { mutableStateOf<GeoPoint?>(null) }
+    var jumpTarget by remember { mutableStateOf<JumpTarget?>(null) }
+    var gpsAccuracy by remember { mutableStateOf<Float?>(null) }
     var activeMarker by remember { mutableStateOf<Marker?>(null) }
     var initialCentered by remember { mutableStateOf(false) }
     val savedLocations by repo.savedLocationsFlow.collectAsState(initial = emptyList())
@@ -458,21 +474,23 @@ fun MapScreen(repo: LocationRepository, onMockDisabled: () -> Unit) {
         if (activeState.first) {
             centerLat = activeState.second
             centerLng = activeState.third
-            jumpTarget = GeoPoint(activeState.second, activeState.third)
+            jumpTarget = JumpTarget(GeoPoint(activeState.second, activeState.third))
         } else {
-            fetchCurrentLocation(context) { lat, lng ->
+            fetchBestLocation(context) { loc ->
+                val lat = loc.latitude
+                val lng = loc.longitude
+                gpsAccuracy = loc.accuracy
                 centerLat = lat
                 centerLng = lng
-                jumpTarget = GeoPoint(lat, lng)
+                jumpTarget = JumpTarget(GeoPoint(lat, lng))
                 scope.launch { repo.setRealLocation(lat, lng) }
             }
         }
     }
 
-    LaunchedEffect(jumpTarget) {
-        jumpTarget?.let { target ->
-            mapViewRef?.controller?.animateTo(target)
-        }
+    LaunchedEffect(jumpTarget, mapViewRef) {
+        val target = jumpTarget ?: return@LaunchedEffect
+        mapViewRef?.controller?.animateTo(target.point)
     }
 
     LaunchedEffect(savedLocations, mapViewRef) {
@@ -490,7 +508,7 @@ fun MapScreen(repo: LocationRepository, onMockDisabled: () -> Unit) {
                 setOnMarkerClickListener { m, _ ->
                     centerLat = loc.lat
                     centerLng = loc.lng
-                    jumpTarget = GeoPoint(loc.lat, loc.lng)
+                    jumpTarget = JumpTarget(GeoPoint(loc.lat, loc.lng))
                     trySetMock(context, loc.lat, loc.lng, loc.name, onMockDisabled)
                     m.showInfoWindow()
                     true
@@ -573,10 +591,18 @@ fun MapScreen(repo: LocationRepository, onMockDisabled: () -> Unit) {
                         color = TextPrimary
                     )
                     Text(
-                        "%.5f, %.5f".format(centerLat, centerLng),
+                        String.format(java.util.Locale.US, "%.5f, %.5f", centerLat, centerLng),
                         fontSize = 10.5.sp,
                         color = TextSecondary
                     )
+                    val acc = gpsAccuracy
+                    if (acc != null && !locked) {
+                        Text(
+                            "GPS accuracy: ±${acc.toInt()} মি." + if (acc > 30f) " (সিগন্যাল দুর্বল)" else "",
+                            fontSize = 10.sp,
+                            color = if (acc > 30f) Color(0xFFDC2626) else TealDark
+                        )
+                    }
                 }
             }
         }
@@ -600,19 +626,25 @@ fun MapScreen(repo: LocationRepository, onMockDisabled: () -> Unit) {
                                 if (real != null) {
                                     centerLat = real.first
                                     centerLng = real.second
-                                    jumpTarget = GeoPoint(real.first, real.second)
+                                    jumpTarget = JumpTarget(GeoPoint(real.first, real.second))
                                 } else {
-                                    fetchCurrentLocation(context) { lat, lng ->
+                                    fetchBestLocation(context) { loc ->
+                                        val lat = loc.latitude
+                                        val lng = loc.longitude
+                                        gpsAccuracy = loc.accuracy
                                         centerLat = lat
                                         centerLng = lng
-                                        jumpTarget = GeoPoint(lat, lng)
+                                        jumpTarget = JumpTarget(GeoPoint(lat, lng))
                                     }
                                 }
                             } else {
-                                fetchCurrentLocation(context) { lat, lng ->
+                                fetchBestLocation(context) { loc ->
+                                    val lat = loc.latitude
+                                    val lng = loc.longitude
+                                    gpsAccuracy = loc.accuracy
                                     centerLat = lat
                                     centerLng = lng
-                                    jumpTarget = GeoPoint(lat, lng)
+                                    jumpTarget = JumpTarget(GeoPoint(lat, lng))
                                     scope.launch { repo.setRealLocation(lat, lng) }
                                 }
                             }
@@ -701,7 +733,7 @@ fun MapScreen(repo: LocationRepository, onMockDisabled: () -> Unit) {
             onConfirm = { lat, lng ->
                 centerLat = lat
                 centerLng = lng
-                jumpTarget = GeoPoint(lat, lng)
+                jumpTarget = JumpTarget(GeoPoint(lat, lng))
                 showDialog = false
             }
         )
@@ -1044,7 +1076,7 @@ fun SavedScreen(repo: LocationRepository, saved: List<SavedLocation>, onMockDisa
                                     }
                                 }
                                 Text(
-                                    "%.5f, %.5f".format(loc.lat, loc.lng),
+                                    String.format(java.util.Locale.US, "%.5f, %.5f", loc.lat, loc.lng),
                                     fontSize = 11.sp,
                                     color = Color(0xFF94A3B8)
                                 )
@@ -1174,14 +1206,23 @@ fun SettingsActionRow(
 fun SettingsScreen(repo: LocationRepository) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var autoStart by remember { mutableStateOf(true) }
-    var jitter by remember { mutableStateOf(false) }
+    val autoStart by repo.autoStartFlow.collectAsState(initial = true)
+    val jitter by repo.jitterFlow.collectAsState(initial = false)
     val autoCycleState by repo.autoCycleFlow.collectAsState(initial = Pair(false, 10))
     var minutesText by remember(autoCycleState.second) { mutableStateOf(autoCycleState.second.toString()) }
     val savedLocations by repo.savedLocationsFlow.collectAsState(initial = emptyList())
     val cycleNames by repo.cycleLocationNamesFlow.collectAsState(initial = emptyList())
     val bubbleEnabled by repo.bubbleEnabledFlow.collectAsState(initial = false)
     var showCyclePicker by remember { mutableStateOf(false) }
+
+    LaunchedEffect(minutesText) {
+        val minutes = minutesText.toIntOrNull()
+        if (minutes != null && minutes > 0 && minutes != autoCycleState.second) {
+            delay(800)
+            repo.setAutoCycle(autoCycleState.first, minutes)
+            if (autoCycleState.first) startAutoCycle(context, minutes)
+        }
+    }
     var batteryExempt by remember { mutableStateOf(BatteryOptHelper.isIgnoringBatteryOptimizations(context)) }
 
     val overlayPermissionLauncher = rememberLauncherForActivityResult(
@@ -1211,14 +1252,6 @@ fun SettingsScreen(repo: LocationRepository) {
         }
     }
 
-    LaunchedEffect(bubbleEnabled) {
-        if (bubbleEnabled && Settings.canDrawOverlays(context)) {
-            startBubble(context)
-        } else {
-            stopBubble(context)
-        }
-    }
-
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Text("সেটিংস", fontSize = 21.sp, fontWeight = FontWeight.Bold, color = TextPrimary, modifier = Modifier.padding(top = 18.dp))
 
@@ -1245,12 +1278,10 @@ fun SettingsScreen(repo: LocationRepository) {
         Surface(shape = RoundedCornerShape(16.dp), color = SurfaceColor, border = BorderStroke(1.dp, BorderColor), modifier = Modifier.fillMaxWidth()) {
             Column {
                 SettingsIconRow(Icons.Filled.PowerSettingsNew, "ফোন চালু হলে অটো-স্টার্ট", checked = autoStart) {
-                    autoStart = it
                     scope.launch { repo.setAutoStart(it) }
                 }
                 HorizontalDivider(color = BorderColor)
                 SettingsIconRow(Icons.Filled.Shuffle, "র‍্যান্ডম জিটার", "±৫ মিটার এলোমেলো ভ্যারিয়েশন", checked = jitter) {
-                    jitter = it
                     scope.launch { repo.setJitter(it) }
                 }
             }
@@ -1315,14 +1346,7 @@ fun SettingsScreen(repo: LocationRepository) {
                     Text("কত মিনিট পরপর বদলাবে", color = Color(0xFF94A3B8), fontSize = 12.sp, modifier = Modifier.weight(1f))
                     OutlinedTextField(
                         value = minutesText,
-                        onValueChange = { text ->
-                            minutesText = text.filter { it.isDigit() }
-                            val minutes = minutesText.toIntOrNull()
-                            if (minutes != null && minutes > 0) {
-                                scope.launch { repo.setAutoCycle(autoCycleState.first, minutes) }
-                                if (autoCycleState.first) startAutoCycle(context, minutes)
-                            }
-                        },
+                        onValueChange = { text -> minutesText = text.filter { it.isDigit() } },
                         suffix = { Text("মিনিট", fontSize = 11.sp) },
                         singleLine = true,
                         modifier = Modifier.width(110.dp)

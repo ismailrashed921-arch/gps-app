@@ -62,8 +62,8 @@ class FakeGpsWidgetProvider : AppWidgetProvider() {
 
         for (loc in saved) {
             val itemView = RemoteViews(context.packageName, R.layout.widget_location_item)
-            val isActive = active && kotlin.math.abs(loc.lat - activeLat) < 0.0001 &&
-                kotlin.math.abs(loc.lng - activeLng) < 0.0001
+            val isActive = active && kotlin.math.abs(loc.lat - activeLat) < 0.00001 &&
+                kotlin.math.abs(loc.lng - activeLng) < 0.00001
 
             itemView.setTextViewText(R.id.location_item_button, "📍 " + loc.name)
             itemView.setInt(

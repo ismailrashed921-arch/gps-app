@@ -63,7 +63,10 @@ class FloatingBubbleService : Service() {
         observeState()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        try { startForeground(NOTIF_ID, buildNotification()) } catch (_: Exception) { }
+        return START_STICKY
+    }
 
     private fun buildNotification(): android.app.Notification {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -175,6 +178,7 @@ class FloatingBubbleService : Service() {
         val icon = ImageView(this).apply {
             val pad = bubbleSize / 4
             setPadding(pad, pad, pad, pad)
+            setImageResource(R.drawable.ic_bubble_pin)
         }
         val bubble = FrameLayout(this).apply {
             background = ovalBg("#94A3B8")

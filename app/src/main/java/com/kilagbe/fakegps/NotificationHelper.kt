@@ -7,7 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import androidx.core.app.NotificationCompat
-import kotlinx.coroutines.runBlocking
 
 object NotificationHelper {
     private const val CHANNEL_ID = "fake_gps_channel"
@@ -26,7 +25,12 @@ object NotificationHelper {
         }
     }
 
-    fun build(context: Context, active: Boolean, activeName: String): android.app.Notification {
+    fun build(
+        context: Context,
+        active: Boolean,
+        activeName: String,
+        saved: List<SavedLocation> = emptyList()
+    ): android.app.Notification {
         ensureChannel(context)
 
         val openAppIntent = Intent(context, MainActivity::class.java)
@@ -41,12 +45,11 @@ object NotificationHelper {
             .setContentText(if (active) "সক্রিয় — $activeName" else "বন্ধ আছে")
             .setContentIntent(openAppPending)
             .setOngoing(active)
+            .setOnlyAlertOnce(true)
             .setColor(Color.parseColor("#0D9488"))
             .setPriority(NotificationCompat.PRIORITY_LOW)
 
-        // Up to 2 quick-switch actions for saved locations, plus stop/start.
-        val saved = runBlocking { LocationRepository(context).getSavedLocations() }
-        saved.take(2).forEach { loc ->
+        saved.take(2).forEachIndexed { index, loc ->
             val switchIntent = Intent(context, NotificationActionReceiver::class.java).apply {
                 action = MockLocationService.ACTION_SWITCH
                 putExtra(MockLocationService.EXTRA_LAT, loc.lat)
@@ -54,7 +57,7 @@ object NotificationHelper {
                 putExtra(MockLocationService.EXTRA_NAME, loc.name)
             }
             val switchPending = PendingIntent.getBroadcast(
-                context, loc.name.hashCode(), switchIntent,
+                context, 100 + index, switchIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             builder.addAction(0, loc.name, switchPending)

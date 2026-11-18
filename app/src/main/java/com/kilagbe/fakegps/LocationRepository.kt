@@ -8,9 +8,11 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -38,8 +40,7 @@ class LocationRepository(private val context: Context) {
 
     val savedLocationsFlow: Flow<List<SavedLocation>> =
         context.dataStore.data.map { prefs ->
-            val raw = prefs[PrefKeys.SAVED_LOCATIONS] ?: "[]"
-            parseLocations(raw)
+            parseLocations(prefs[PrefKeys.SAVED_LOCATIONS] ?: "[]")
         }
 
     val activeStateFlow: Flow<Triple<Boolean, Double, Double>> =
@@ -51,6 +52,15 @@ class LocationRepository(private val context: Context) {
             )
         }
 
+    val activeNameFlow: Flow<String> =
+        context.dataStore.data.map { prefs -> prefs[PrefKeys.ACTIVE_NAME] ?: "" }
+
+    val autoStartFlow: Flow<Boolean> =
+        context.dataStore.data.map { prefs -> prefs[PrefKeys.AUTO_START] ?: true }
+
+    val jitterFlow: Flow<Boolean> =
+        context.dataStore.data.map { prefs -> prefs[PrefKeys.JITTER] ?: false }
+
     val autoCycleFlow: Flow<Pair<Boolean, Int>> =
         context.dataStore.data.map { prefs ->
             Pair(
@@ -59,13 +69,14 @@ class LocationRepository(private val context: Context) {
             )
         }
 
-    /** Ordered list of location names selected for the auto-cycle rotation.
-     *  Empty means "use all saved locations" (backward compatible default). */
     val cycleLocationNamesFlow: Flow<List<String>> =
         context.dataStore.data.map { prefs ->
-            val raw = prefs[PrefKeys.CYCLE_LOCATION_NAMES] ?: "[]"
-            val arr = JSONArray(raw)
-            (0 until arr.length()).map { arr.getString(it) }
+            try {
+                val arr = JSONArray(prefs[PrefKeys.CYCLE_LOCATION_NAMES] ?: "[]")
+                (0 until arr.length()).map { arr.getString(it) }
+            } catch (_: Exception) {
+                emptyList()
+            }
         }
 
     val bubbleEnabledFlow: Flow<Boolean> =
@@ -73,9 +84,6 @@ class LocationRepository(private val context: Context) {
 
     suspend fun getSavedLocations(): List<SavedLocation> = savedLocationsFlow.first()
 
-    /** Returns the ordered list of locations to actually cycle through:
-     *  the user's selection if any, filtered to only locations that still exist,
-     *  otherwise falls back to all saved locations. */
     suspend fun getCycleLocations(): List<SavedLocation> {
         val all = getSavedLocations()
         val selectedNames = cycleLocationNamesFlow.first()
@@ -92,7 +100,13 @@ class LocationRepository(private val context: Context) {
 
     suspend fun addLocation(loc: SavedLocation) {
         val current = getSavedLocations().toMutableList()
-        current.add(loc)
+        var name = loc.name
+        var n = 2
+        while (current.any { it.name == name }) {
+            name = "${loc.name} ($n)"
+            n++
+        }
+        current.add(loc.copy(name = name))
         persist(current)
         FakeGpsWidgetProvider.updateWidgets(context)
     }
@@ -101,30 +115,30 @@ class LocationRepository(private val context: Context) {
         val current = getSavedLocations().filterNot { it.name == name }
         persist(current)
         FakeGpsWidgetProvider.updateWidgets(context)
-        // keep cycle selection in sync if the removed location was part of it
         val names = cycleLocationNamesFlow.first()
         if (name in names) setCycleLocationNames(names.filterNot { it == name })
     }
 
     suspend fun restoreFromBackupIfEmpty(): Boolean {
         if (getSavedLocations().isNotEmpty()) return false
-        val backup = LocalBackupManager.readBackup(context)
+        val backup = withContext(Dispatchers.IO) { LocalBackupManager.readBackup(context) }
         if (backup.isNullOrEmpty()) return false
         persist(backup)
         return true
     }
 
     suspend fun backupNow(): Boolean {
-        return LocalBackupManager.writeBackup(context, getSavedLocations())
+        val list = getSavedLocations()
+        return withContext(Dispatchers.IO) { LocalBackupManager.writeBackup(context, list) }
     }
 
     suspend fun restoreFromBackupMerge(): Int {
-        val backup = LocalBackupManager.readBackup(context) ?: return -1
+        val backup = withContext(Dispatchers.IO) { LocalBackupManager.readBackup(context) } ?: return -1
         return mergeIn(backup)
     }
 
     suspend fun restoreFromUri(uri: Uri): Int {
-        val items = LocalBackupManager.readFromUri(context, uri) ?: return -1
+        val items = withContext(Dispatchers.IO) { LocalBackupManager.readFromUri(context, uri) } ?: return -1
         return mergeIn(items)
     }
 
@@ -150,7 +164,7 @@ class LocationRepository(private val context: Context) {
         context.dataStore.edit { prefs ->
             prefs[PrefKeys.SAVED_LOCATIONS] = arr.toString()
         }
-        LocalBackupManager.writeBackup(context, list)
+        withContext(Dispatchers.IO) { LocalBackupManager.writeBackup(context, list) }
     }
 
     suspend fun setActive(active: Boolean, lat: Double, lng: Double, name: String?) {
@@ -178,6 +192,10 @@ class LocationRepository(private val context: Context) {
         }
     }
 
+    suspend fun setAutoCycleEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs -> prefs[PrefKeys.AUTO_CYCLE] = enabled }
+    }
+
     suspend fun setRealLocation(lat: Double, lng: Double) {
         context.dataStore.edit { prefs ->
             prefs[PrefKeys.REAL_LAT] = lat
@@ -197,12 +215,16 @@ class LocationRepository(private val context: Context) {
     }
 
     private fun parseLocations(raw: String): List<SavedLocation> {
-        val arr = JSONArray(raw)
-        val list = mutableListOf<SavedLocation>()
-        for (i in 0 until arr.length()) {
-            val obj = arr.getJSONObject(i)
-            list.add(SavedLocation(obj.getString("name"), obj.getDouble("lat"), obj.getDouble("lng")))
+        return try {
+            val arr = JSONArray(raw)
+            val list = mutableListOf<SavedLocation>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                list.add(SavedLocation(obj.getString("name"), obj.getDouble("lat"), obj.getDouble("lng")))
+            }
+            list
+        } catch (_: Exception) {
+            emptyList()
         }
-        return list
     }
 }

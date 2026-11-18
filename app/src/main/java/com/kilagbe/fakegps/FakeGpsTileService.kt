@@ -73,8 +73,8 @@ class FakeGpsTileService : TileService() {
         } else {
             for (loc in saved) {
                 val isActive = active &&
-                    kotlin.math.abs(loc.lat - activeLat) < 0.0001 &&
-                    kotlin.math.abs(loc.lng - activeLng) < 0.0001
+                    kotlin.math.abs(loc.lat - activeLat) < 0.00001 &&
+                    kotlin.math.abs(loc.lng - activeLng) < 0.00001
 
                 val row = TextView(ctx).apply {
                     text = "📍  ${loc.name}" + if (isActive) "  ✓" else ""
