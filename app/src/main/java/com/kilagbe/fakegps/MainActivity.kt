@@ -77,10 +77,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** Checks whether this app is currently selected as the system's mock location app
- *  (Developer Options > Select mock location app). If not, addTestProvider throws
- *  SecurityException and location changes silently do nothing — this lets us detect
- *  that up front and tell the user, instead of the app appearing to "just not work". */
 fun isMockLocationAllowed(context: Context): Boolean {
     val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
     val probeProvider = "fakegps_probe_provider"
@@ -96,7 +92,6 @@ fun isMockLocationAllowed(context: Context): Boolean {
     } catch (e: SecurityException) {
         false
     } catch (_: Exception) {
-        // Any other failure isn't a permission problem — don't block the user for it.
         true
     }
 }
@@ -135,6 +130,29 @@ fun MockNotEnabledDialog(onDismiss: () -> Unit, onOpenSettings: () -> Unit) {
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("বাতিল") }
+        }
+    )
+}
+
+@Composable
+fun BatteryOptimizationDialog(onDismiss: () -> Unit, onOpenSettings: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("ব্যাটারি অপ্টিমাইজেশন বন্ধ করুন") },
+        text = {
+            Text(
+                "এই ফোনে ব্যাটারি সেভিং মোড অ্যাপটার ব্যাকগ্রাউন্ড সার্ভিস মাঝেমাঝে বন্ধ করে দিচ্ছে, " +
+                    "যার কারণে লোকেশন নিজে থেকে বন্ধ হয়ে আবার চালু হয়ে যাচ্ছে।\n\n" +
+                    "এটা ঠিক করতে পরের স্ক্রিনে \"No restrictions\" বা \"Battery saver থেকে বাদ দিন\" বেছে নাও।",
+                fontSize = 13.sp,
+                color = TextSecondary
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onOpenSettings) { Text("সেটিংসে যান", color = Teal, fontWeight = FontWeight.Bold) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("পরে করবো") }
         }
     )
 }
@@ -262,6 +280,13 @@ fun AppRoot() {
         }
     }
 
+    var showBatteryDialog by remember { mutableStateOf(false) }
+    LaunchedEffect(permissionsGranted) {
+        if (permissionsGranted && !BatteryOptHelper.isIgnoringBatteryOptimizations(context)) {
+            showBatteryDialog = true
+        }
+    }
+
     if (!permissionsGranted) {
         PermissionRequestScreen {
             val permissionsToRequest = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
@@ -325,10 +350,18 @@ fun AppRoot() {
             }
         )
     }
+
+    if (showBatteryDialog) {
+        BatteryOptimizationDialog(
+            onDismiss = { showBatteryDialog = false },
+            onOpenSettings = {
+                showBatteryDialog = false
+                BatteryOptHelper.requestIgnoreBatteryOptimizations(context)
+            }
+        )
+    }
 }
 
-/** Checks mock-location permission before starting; if disabled, calls onMockDisabled
- *  instead of silently failing. Use this from the UI instead of calling startMock directly. */
 fun trySetMock(context: Context, lat: Double, lng: Double, name: String, onMockDisabled: () -> Unit) {
     if (!isMockLocationAllowed(context)) {
         onMockDisabled()
@@ -1149,6 +1182,7 @@ fun SettingsScreen(repo: LocationRepository) {
     val cycleNames by repo.cycleLocationNamesFlow.collectAsState(initial = emptyList())
     val bubbleEnabled by repo.bubbleEnabledFlow.collectAsState(initial = false)
     var showCyclePicker by remember { mutableStateOf(false) }
+    var batteryExempt by remember { mutableStateOf(BatteryOptHelper.isIgnoringBatteryOptimizations(context)) }
 
     val overlayPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -1187,6 +1221,25 @@ fun SettingsScreen(repo: LocationRepository) {
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Text("সেটিংস", fontSize = 21.sp, fontWeight = FontWeight.Bold, color = TextPrimary, modifier = Modifier.padding(top = 18.dp))
+
+        if (!batteryExempt) {
+            SettingsSectionLabel("ব্যাটারি")
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFFFEF2F2),
+                border = BorderStroke(1.dp, Color(0xFFFECACA)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                SettingsActionRow(
+                    icon = Icons.Filled.BatteryAlert,
+                    title = "ব্যাটারি অপ্টিমাইজেশন বন্ধ করুন",
+                    description = "নাহলে সার্ভিস মাঝে মাঝে নিজে বন্ধ/চালু হতে পারে",
+                    buttonText = "ঠিক করুন"
+                ) {
+                    BatteryOptHelper.requestIgnoreBatteryOptimizations(context)
+                }
+            }
+        }
 
         SettingsSectionLabel("সাধারণ")
         Surface(shape = RoundedCornerShape(16.dp), color = SurfaceColor, border = BorderStroke(1.dp, BorderColor), modifier = Modifier.fillMaxWidth()) {
