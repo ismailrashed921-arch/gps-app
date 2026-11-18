@@ -319,6 +319,13 @@ fun AppRoot() {
         }
     }
 
+    var showBatteryDialog by remember { mutableStateOf(false) }
+    LaunchedEffect(permissionsGranted) {
+        if (permissionsGranted && !BatteryOptHelper.isIgnoringBatteryOptimizations(context)) {
+            showBatteryDialog = true
+        }
+    }
+
     val bubbleEnabledRoot by repo.bubbleEnabledFlow.collectAsState(initial = false)
     LaunchedEffect(bubbleEnabledRoot) {
         if (bubbleEnabledRoot && Settings.canDrawOverlays(context)) {

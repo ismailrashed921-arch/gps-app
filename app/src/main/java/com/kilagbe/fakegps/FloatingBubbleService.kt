@@ -178,7 +178,6 @@ class FloatingBubbleService : Service() {
         val icon = ImageView(this).apply {
             val pad = bubbleSize / 4
             setPadding(pad, pad, pad, pad)
-            setImageResource(R.drawable.ic_bubble_pin)
         }
         val bubble = FrameLayout(this).apply {
             background = ovalBg("#94A3B8")
