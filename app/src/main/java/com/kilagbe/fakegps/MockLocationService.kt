@@ -53,6 +53,7 @@ class MockLocationService : Service() {
             get() = buildList {
                 add(LocationManager.GPS_PROVIDER)
                 add(LocationManager.NETWORK_PROVIDER)
+                add(LocationManager.PASSIVE_PROVIDER)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     add(LocationManager.FUSED_PROVIDER)
                 }
