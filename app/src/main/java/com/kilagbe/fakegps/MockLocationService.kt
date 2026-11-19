@@ -40,7 +40,7 @@ class MockLocationService : Service() {
         const val EXTRA_INTERVAL_MINUTES = "extra_interval_minutes"
         const val NOTIF_ID = 1001
 
-        private const val PUSH_INTERVAL_MS = 1000L
+        private const val PUSH_INTERVAL_MS = 250L
         private const val MOCK_ACCURACY_M = 3f
         private const val WARM_UP_MS = 15_000L
 
